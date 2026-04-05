@@ -1,14 +1,27 @@
 import json
 import time
 import random
-from faker import Faker
 import uuid
+from faker import Faker
+from confluent_kafka import Producer
 
 # Initialize Faker to generate random data
 fake = Faker()
 
 # A list of typical e-commerce items
 ITEMS = ["Laptop", "Wireless Headphones", "Coffee Maker", "Desk Chair", "4K Monitor", "Mechanical Keyboard"]
+
+# This tells Python to look for the Kafka door we opened in docker-compose (port 29092)
+conf = {'bootstrap.servers': 'localhost:29092'}
+producer = Producer(conf)
+topic_name = 'ecommerce_orders'
+
+def delivery_report(err, msg):
+    """Callback triggered by Kafka to tell us if the message sent successfully."""
+    if err is not None:
+        print(f"Message delivery failed: {err}")
+    else:
+        print(f"Message delivered to {msg.topic()} [{msg.partition()}]")
 
 def generate_order():
     """Generates a single fake e-commerce order."""
@@ -35,20 +48,26 @@ def generate_order():
     return order
 
 if __name__ == "__main__":
-    print("Starting E-commerce Data Generator...")
-    print("Press Ctrl+C to stop.")
+    print(f"Starting E-commerce Data Generator. Sending to Kafka topic: {topic_name}...")
     
     try:
-        # Generate exactly 100 records for our Phase 4 "Safety Net" test
         for i in range(100):
             order_data = generate_order()
-            # Print the JSON to the terminal so we can see it working
-            print(json.dumps(order_data))
             
-            # Pause for half a second to simulate steady website traffic
+            # We convert the Python dictionary to a JSON string, then encode it to bytes
+            producer.produce(
+                topic=topic_name, 
+                value=json.dumps(order_data).encode('utf-8'), 
+                callback=delivery_report
+            )
+            
+            # Ask Kafka to actually send the messages in its queue
+            producer.poll(0)
             time.sleep(0.5) 
             
-        print("\nSuccessfully generated 100 records. Exiting.")
+        # Wait for any outstanding messages to be delivered before exiting
+        producer.flush()
+        print("\nSuccessfully sent 100 records to Kafka. Exiting.")
         
     except KeyboardInterrupt:
         print("\nGenerator stopped manually.")
