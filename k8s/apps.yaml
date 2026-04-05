@@ -1,0 +1,59 @@
+# ==========================================
+# 1. THE DATA GENERATOR
+# ==========================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ecommerce-generator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: generator
+  template:
+    metadata:
+      labels:
+        app: generator
+    spec:
+      containers:
+      - name: generator
+        image: vivek22v/ecommerce-generator:latest # Pulling straight from your Docker Hub!
+        imagePullPolicy: Always
+        # Automatically inject KAFKA_BROKER and KAFKA_TOPIC from the ConfigMap
+        envFrom:
+        - configMapRef:
+            name: ecommerce-config
+
+# ==========================================
+# 2. THE DATA PROCESSOR
+# ==========================================
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ecommerce-processor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: processor
+  template:
+    metadata:
+      labels:
+        app: processor
+    spec:
+      containers:
+      - name: processor
+        image: vivek22v/ecommerce-processor:latest
+        imagePullPolicy: Always
+        # Inject the public variables (DB_HOST, DB_USER, etc.)
+        envFrom:
+        - configMapRef:
+            name: ecommerce-config
+        # Securely inject the hidden password from the Secret
+        env:
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: ecommerce-secrets
+              key: DB_PASSWORD

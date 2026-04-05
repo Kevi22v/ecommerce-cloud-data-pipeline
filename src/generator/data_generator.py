@@ -1,3 +1,4 @@
+import os
 import json
 import time
 import random
@@ -11,10 +12,16 @@ fake = Faker()
 # A list of typical e-commerce items
 ITEMS = ["Laptop", "Wireless Headphones", "Coffee Maker", "Desk Chair", "4K Monitor", "Mechanical Keyboard"]
 
-# This tells Python to look for the Kafka door we opened in docker-compose (port 29092)
-conf = {'bootstrap.servers': 'localhost:29092'}
+# ==========================================
+# CLOUD NATIVE UPGRADE: Read environment variables
+# ==========================================
+KAFKA_BROKER = os.environ.get("KAFKA_BROKER", "localhost:29092")
+KAFKA_TOPIC = os.environ.get("KAFKA_TOPIC", "ecommerce_orders")
+
+print(f"Connecting to Kafka Broker at: {KAFKA_BROKER}")
+
+conf = {'bootstrap.servers': KAFKA_BROKER}
 producer = Producer(conf)
-topic_name = 'ecommerce_orders'
 
 def delivery_report(err, msg):
     """Callback triggered by Kafka to tell us if the message sent successfully."""
@@ -25,15 +32,11 @@ def delivery_report(err, msg):
 
 def generate_order():
     """Generates a single fake e-commerce order."""
-    
-    # Simulate a 5% chance of an unusually large order (our "Fraud" / "Anomaly" trigger)
     is_anomaly = random.random() < 0.05 
     
     if is_anomaly:
-        # Suspiciously high price
         price = round(random.uniform(2500.00, 5000.00), 2)
     else:
-        # Normal price range
         price = round(random.uniform(15.00, 300.00), 2)
 
     order = {
@@ -42,32 +45,28 @@ def generate_order():
         "item": random.choice(ITEMS),
         "price": price,
         "timestamp": int(time.time()),
-        "is_anomaly_injected": is_anomaly # Flagging it just so we can verify our pipeline works later
+        "is_anomaly_injected": is_anomaly 
     }
-    
     return order
 
 if __name__ == "__main__":
-    print(f"Starting E-commerce Data Generator. Sending to Kafka topic: {topic_name}...")
+    print(f"Starting E-commerce Data Generator. Sending to Kafka topic: {KAFKA_TOPIC}...")
     
     try:
-        for i in range(100):
+        # Changed this to a while True loop so it runs forever in Kubernetes
+        # instead of just stopping after 100 records!
+        while True:
             order_data = generate_order()
             
-            # We convert the Python dictionary to a JSON string, then encode it to bytes
             producer.produce(
-                topic=topic_name, 
+                topic=KAFKA_TOPIC, 
                 value=json.dumps(order_data).encode('utf-8'), 
                 callback=delivery_report
             )
             
-            # Ask Kafka to actually send the messages in its queue
             producer.poll(0)
             time.sleep(0.5) 
             
-        # Wait for any outstanding messages to be delivered before exiting
-        producer.flush()
-        print("\nSuccessfully sent 100 records to Kafka. Exiting.")
-        
     except KeyboardInterrupt:
+        producer.flush()
         print("\nGenerator stopped manually.")

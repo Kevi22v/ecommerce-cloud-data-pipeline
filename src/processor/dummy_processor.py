@@ -1,73 +1,66 @@
+import os
 import json
 import psycopg2
-from confluent_kafka import Consumer
+from kafka import KafkaConsumer
 
-# --- 1. Connect to PostgreSQL ---
-print("Connecting to PostgreSQL...")
-conn = psycopg2.connect(
-    host="localhost",
-    database="ecommerce_db",
-    user="admin",
-    password="password123",
-    port="5432"
-)
-cursor = conn.cursor()
+# 1. Read Cloud Variables
+DB_HOST = os.environ.get("DB_HOST", "localhost")
+DB_NAME = os.environ.get("DB_NAME", "ecommerce_db")
+DB_USER = os.environ.get("DB_USER", "dbadmin")
+DB_PASSWORD = os.environ.get("DB_PASSWORD", "password123")
+KAFKA_BROKER = os.environ.get("KAFKA_BROKER", "localhost:9092")
+KAFKA_TOPIC = os.environ.get("KAFKA_TOPIC", "ecommerce_orders")
 
-# Create the storage table if it doesn't exist yet
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS orders (
-    order_id VARCHAR(255) PRIMARY KEY,
-    user_id INT,
-    item VARCHAR(255),
-    price FLOAT,
-    timestamp BIGINT,
-    is_anomaly_injected BOOLEAN
-);
-""")
-conn.commit()
-print("Postgres table 'orders' is ready.")
+print(f"Connecting to PostgreSQL at {DB_HOST}...")
 
-# --- 2. Configure the Kafka Consumer ---
-print("Connecting to Kafka...")
-consumer = Consumer({
-    'bootstrap.servers': 'localhost:29092',
-    'group.id': 'python-processor-group',
-    # 'earliest' tells Kafka to read from the beginning, so we catch the 100 messages you already sent!
-    'auto.offset.reset': 'earliest' 
-})
-
-consumer.subscribe(['ecommerce_orders'])
-print("Listening for messages on topic 'ecommerce_orders'...")
-
-# --- 3. The Processing Loop ---
+# 2. Connect to AWS RDS
 try:
-    while True:
-        # Wait up to 1 second for a new message
-        msg = consumer.poll(1.0) 
-        
-        if msg is None:
-            continue
-        if msg.error():
-            print(f"Consumer error: {msg.error()}")
-            continue
+    conn = psycopg2.connect(
+        host=DB_HOST,
+        dbname=DB_NAME,
+        user=DB_USER,
+        password=DB_PASSWORD
+    )
+    conn.autocommit = True
+    cursor = conn.cursor()
+    
+    # Ensure the table exists in our fresh AWS database
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS orders (
+            order_id VARCHAR(255) PRIMARY KEY,
+            user_id INT,
+            item VARCHAR(255),
+            price DECIMAL(10, 2),
+            timestamp BIGINT,
+            is_anomaly_injected BOOLEAN
+        );
+    """)
+    print("Database connection and table verified.")
+except Exception as e:
+    print(f"Fatal Database Error: {e}")
+    exit(1)
 
-        # Decode the JSON message from Kafka
-        data = json.loads(msg.value().decode('utf-8'))
-        
-        # Insert the data into Postgres
+print(f"Connecting to Kafka at {KAFKA_BROKER}...")
+
+# 3. Connect to Kafka
+consumer = KafkaConsumer(
+    KAFKA_TOPIC,
+    bootstrap_servers=[KAFKA_BROKER],
+    value_deserializer=lambda x: json.loads(x.decode('utf-8')),
+    auto_offset_reset='earliest' # Start reading from the oldest unread message
+)
+
+print("Successfully connected! Listening for incoming orders...")
+
+# 4. The Infinite Loop (This keeps the container alive forever)
+for message in consumer:
+    order = message.value
+    print(f"Processing Order: {order['order_id']} | Item: {order['item']} | Price: ${order['price']}")
+    
+    try:
         cursor.execute("""
             INSERT INTO orders (order_id, user_id, item, price, timestamp, is_anomaly_injected)
             VALUES (%s, %s, %s, %s, %s, %s)
-            ON CONFLICT (order_id) DO NOTHING;
-        """, (data['order_id'], data['user_id'], data['item'], data['price'], data['timestamp'], data['is_anomaly_injected']))
-        
-        conn.commit()
-        print(f"Saved order {data['order_id']} to Postgres")
-
-except KeyboardInterrupt:
-    print("\nProcessor stopped manually.")
-finally:
-    # Clean up connections when we stop the script
-    consumer.close()
-    cursor.close()
-    conn.close()
+        """, (order['order_id'], order['user_id'], order['item'], order['price'], order['timestamp'], order['is_anomaly_injected']))
+    except psycopg2.Error as e:
+        print(f"Failed to insert row: {e}")
