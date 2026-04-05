@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="refresh" content="3"> 
+    <title>E-Commerce Flash Sale Live</title>
+    <style>
+        body { font-family: Arial, sans-serif; background-color: #f4f4f9; padding: 20px; }
+        h1 { color: #333; text-align: center; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; background: white; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
+        th { background-color: #0056b3; color: white; }
+        .anomaly { background-color: #ffcccc; color: #990000; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <h1>🚀 Live Flash Sale Analytics</h1>
+    
+    <table>
+        <thead>
+            <tr>
+                <th>Order ID</th>
+                <th>User ID</th>
+                <th>Item Purchased</th>
+                <th>Price ($)</th>
+                <th>Status</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for order in orders %}
+            <tr class="{% if order[4] %}anomaly{% endif %}">
+                <td>{{ order[0][:8] }}...</td>
+                <td>{{ order[1] }}</td>
+                <td>{{ order[2] }}</td>
+                <td>${{ order[3] }}</td>
+                <td>{% if order[4] %}⚠️ FRAUD ALERT{% else %}✅ Verified{% endif %}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+</body>
+</html>
