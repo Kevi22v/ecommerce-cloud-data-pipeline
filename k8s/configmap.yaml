@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ecommerce-config
+data:
+  DB_HOST: "ecommerce-secure-db.ce7q08uos99n.us-east-1.rds.amazonaws.com"
+  DB_NAME: "ecommerce_db"
+  DB_USER: "dbadmin"
+  KAFKA_BROKER: "kafka-service:9092" # We will build this Kafka service next!
+  KAFKA_TOPIC: "ecommerce_orders"
