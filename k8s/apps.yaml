@@ -1,33 +1,99 @@
 # ==========================================
-# 1. THE DATA GENERATOR
+# 1. THE ORDER GENERATOR (Financials)
 # ==========================================
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: ecommerce-generator
+  name: order-generator
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: generator
+      app: order-generator
   template:
     metadata:
       labels:
-        app: generator
+        app: order-generator
     spec:
       containers:
       - name: generator
-        image: vivek22v/ecommerce-generator:latest # Pulling straight from your Docker Hub!
+        image: vivek22v/ecommerce-generator:latest
         imagePullPolicy: Always
-        # Automatically inject KAFKA_BROKER and KAFKA_TOPIC from the ConfigMap
+        # This tells this specific pod to run the Order script
+        command: ["python", "order_gen.py"]
         envFrom:
         - configMapRef:
             name: ecommerce-config
+        env:
+        - name: KAFKA_ORDER_TOPIC
+          value: "ecommerce_orders"
 
-# ==========================================
-# 2. THE DATA PROCESSOR
-# ==========================================
 ---
+# ==========================================
+# 2. THE CLICKSTREAM GENERATOR (Web Traffic)
+# ==========================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: clickstream-generator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: clickstream-generator
+  template:
+    metadata:
+      labels:
+        app: clickstream-generator
+    spec:
+      containers:
+      - name: generator
+        image: vivek22v/ecommerce-generator:latest
+        imagePullPolicy: Always
+        # This tells this specific pod to run the Clickstream script
+        command: ["python", "clickstream_gen.py"]
+        envFrom:
+        - configMapRef:
+            name: ecommerce-config
+        env:
+        - name: KAFKA_CLICKSTREAM_TOPIC
+          value: "ecommerce_clickstream"
+
+---
+# ==========================================
+# 3. THE INVENTORY GENERATOR (Warehouse)
+# ==========================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inventory-generator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: inventory-generator
+  template:
+    metadata:
+      labels:
+        app: inventory-generator
+    spec:
+      containers:
+      - name: generator
+        image: vivek22v/ecommerce-generator:latest
+        imagePullPolicy: Always
+        # This tells this specific pod to run the Inventory script
+        command: ["python", "inventory_gen.py"]
+        envFrom:
+        - configMapRef:
+            name: ecommerce-config
+        env:
+        - name: KAFKA_INVENTORY_TOPIC
+          value: "ecommerce_inventory"
+
+---
+# ==========================================
+# 4. THE DATA PROCESSOR (The Brain)
+# ==========================================
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -46,11 +112,9 @@ spec:
       - name: processor
         image: vivek22v/ecommerce-processor:latest
         imagePullPolicy: Always
-        # Inject the public variables (DB_HOST, DB_USER, etc.)
         envFrom:
         - configMapRef:
             name: ecommerce-config
-        # Securely inject the hidden password from the Secret
         env:
         - name: DB_PASSWORD
           valueFrom:
