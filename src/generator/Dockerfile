@@ -9,7 +9,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the actual Python script
-COPY data_generator.py .
+COPY . .
 
 # Command to run when the container starts
-CMD ["python", "data_generator.py"]
+CMD ["python", "order_gen.py"]
