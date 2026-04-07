@@ -52,12 +52,12 @@ clicks_watermarked = clicks_df.withWatermark("event_time", "5 minutes")
 orders_watermarked = orders_df.withWatermark("timestamp", "5 minutes")
 
 # 5. Complex Windowed Join
-joined_df = clicks_watermarked.join(
-    orders_watermarked,
+joined_df = clicks_watermarked.alias("c").join(
+    orders_watermarked.alias("o"),
     expr("""
-        data.user_id = data.user_id AND
-        timestamp >= event_time AND
-        timestamp <= event_time + interval 1 hour
+        c.user_id = o.user_id AND
+        o.timestamp >= c.event_time AND
+        o.timestamp <= c.event_time + interval 1 hour
     """)
 )
 
