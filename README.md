@@ -23,6 +23,15 @@ It is fully provisioned using **Infrastructure as Code (IaC)** and deployed via 
 
 ---
 
+## 🧩 The Architecture
+
+<div align="center">
+  <img src="assets/architecture-diagram.svg" alt="Lambda Architecture Diagram" width="800">
+</div>
+
+<br>
+
+This repository contains a production-grade data engineering pipeline...
 ## ✨ Key Features
 
 ### 🌪️ Chaos Engineering
