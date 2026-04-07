@@ -24,7 +24,7 @@ jobs:
       with:
         context: ./src/generators
         push: true
-        tags: ${{ secrets.DOCKERHUB_USERNAME }}/ecommerce-generators:latest
+        tags: ${{ secrets.DOCKERHUB_USERNAME }}/ecommerce-generator:latest
 
     - name: Build and Push Processor Image
       uses: docker/build-push-action@v4
