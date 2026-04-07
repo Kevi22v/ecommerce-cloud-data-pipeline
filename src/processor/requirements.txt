@@ -1,2 +1,2 @@
-kafka-python
-psycopg2-binary
+pyspark==3.4.1
+psycopg2-binary==2.9.9
