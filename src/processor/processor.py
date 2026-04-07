@@ -1,66 +1,89 @@
 import os
-import json
-import psycopg2
-from kafka import KafkaConsumer
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, from_json, expr
+from pyspark.sql.types import StructType, StructField, StringType, DoubleType, TimestampType
 
-# 1. Read Cloud Variables
+# 1. Initialize the Spark Session
+spark = SparkSession.builder \
+    .appName("EcommerceRealTimeProcessor") \
+    .getOrCreate()
+
+spark.sparkContext.setLogLevel("WARN")
+
+# Fetch database credentials securely injected by Kubernetes ConfigMap and Secret
 DB_HOST = os.environ.get("DB_HOST", "localhost")
-DB_NAME = os.environ.get("DB_NAME", "ecommerce_db")
+DB_URL = f"jdbc:postgresql://{DB_HOST}:5432/ecommerce_db" 
 DB_USER = os.environ.get("DB_USER", "dbadmin")
-DB_PASSWORD = os.environ.get("DB_PASSWORD", "password123")
-KAFKA_BROKER = os.environ.get("KAFKA_BROKER", "localhost:9092")
-KAFKA_TOPIC = os.environ.get("KAFKA_TOPIC", "ecommerce_orders")
+DB_PASS = os.environ.get("DB_PASSWORD", "fallback_pass")
 
-print(f"Connecting to PostgreSQL at {DB_HOST}...")
+# 2. Define the JSON Schemas
+click_schema = StructType([
+    StructField("user_id", StringType(), True),
+    StructField("event_time", TimestampType(), True),
+    StructField("page_url", StringType(), True)
+])
 
-# 2. Connect to AWS RDS
-try:
-    conn = psycopg2.connect(
-        host=DB_HOST,
-        dbname=DB_NAME,
-        user=DB_USER,
-        password=DB_PASSWORD
-    )
-    conn.autocommit = True
-    cursor = conn.cursor()
+order_schema = StructType([
+    StructField("order_id", StringType(), True),
+    StructField("user_id", StringType(), True),
+    StructField("item", StringType(), True),
+    StructField("price", DoubleType(), True),
+    StructField("timestamp", TimestampType(), True), # Using timestamp as time
+])
+
+# 3. Read Real-Time Streams from Kafka
+def read_kafka_topic(topic_name, schema):
+    df = spark.readStream \
+        .format("kafka") \
+        .option("kafka.bootstrap.servers", "kafka-service:9092") \
+        .option("subscribe", topic_name) \
+        .option("startingOffsets", "latest") \
+        .load()
     
-    # Ensure the table exists in our fresh AWS database
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS orders (
-            order_id VARCHAR(255) PRIMARY KEY,
-            user_id INT,
-            item VARCHAR(255),
-            price DECIMAL(10, 2),
-            timestamp BIGINT,
-            is_anomaly_injected BOOLEAN
-        );
+    return df.select(from_json(col("value").cast("string"), schema).alias("data")) \
+             .select("data.*")
+
+# Listen to the exact topics from your ConfigMap
+clicks_df = read_kafka_topic("ecommerce_clickstream", click_schema)
+orders_df = read_kafka_topic("ecommerce_orders", order_schema)
+
+# 4. Apply Watermarking (Handles late-arriving data)
+clicks_watermarked = clicks_df.withWatermark("event_time", "5 minutes")
+orders_watermarked = orders_df.withWatermark("timestamp", "5 minutes")
+
+# 5. Complex Windowed Join
+joined_df = clicks_watermarked.join(
+    orders_watermarked,
+    expr("""
+        data.user_id = data.user_id AND
+        timestamp >= event_time AND
+        timestamp <= event_time + interval 1 hour
     """)
-    print("Database connection and table verified.")
-except Exception as e:
-    print(f"Fatal Database Error: {e}")
-    exit(1)
-
-print(f"Connecting to Kafka at {KAFKA_BROKER}...")
-
-# 3. Connect to Kafka
-consumer = KafkaConsumer(
-    KAFKA_TOPIC,
-    bootstrap_servers=[KAFKA_BROKER],
-    value_deserializer=lambda x: json.loads(x.decode('utf-8')),
-    auto_offset_reset='earliest' # Start reading from the oldest unread message
 )
 
-print("Successfully connected! Listening for incoming orders...")
+# 6. Write to Hot Storage (AWS RDS / PostgreSQL)
+def write_to_rds(df, epoch_id):
+    df.write \
+        .format("jdbc") \
+        .option("url", DB_URL) \
+        .option("dbtable", "live_conversions") \
+        .option("user", DB_USER) \
+        .option("password", DB_PASS) \
+        .mode("append") \
+        .save()
 
-# 4. The Infinite Loop (This keeps the container alive forever)
-for message in consumer:
-    order = message.value
-    print(f"Processing Order: {order['order_id']} | Item: {order['item']} | Price: ${order['price']}")
-    
-    try:
-        cursor.execute("""
-            INSERT INTO orders (order_id, user_id, item, price, timestamp, is_anomaly_injected)
-            VALUES (%s, %s, %s, %s, %s, %s)
-        """, (order['order_id'], order['user_id'], order['item'], order['price'], order['timestamp'], order['is_anomaly_injected']))
-    except psycopg2.Error as e:
-        print(f"Failed to insert row: {e}")
+rds_query = joined_df.writeStream \
+    .foreachBatch(write_to_rds) \
+    .outputMode("append") \
+    .start()
+
+# 7. Write to Cold Storage (AWS S3 Data Lake) -> USING YOUR EXACT BUCKET
+s3_query = joined_df.writeStream \
+    .format("parquet") \
+    .option("path", "s3a://ecommerce-datalake-1b5e978b/processed-data/") \
+    .option("checkpointLocation", "s3a://ecommerce-datalake-1b5e978b/checkpoints/") \
+    .outputMode("append") \
+    .start()
+
+# Keep application running
+spark.streams.awaitAnyTermination()
