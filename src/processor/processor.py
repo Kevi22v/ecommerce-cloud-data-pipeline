@@ -5,11 +5,12 @@ from pyspark.sql.types import StructType, StructField, StringType, DoubleType, T
 
 # 1. Initialize the Spark Session
 # 1. Initialize the Spark Session
+# 1. Initialize the Spark Session
 spark = SparkSession.builder \
     .appName("EcommerceRealTimeProcessor") \
     .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.1,org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262,org.postgresql:postgresql:42.6.0") \
     .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
-    .config("spark.hadoop.fs.s3a.aws.credentials.provider", "com.amazonaws.auth.InstanceProfileCredentialsProvider") \
+    .config("spark.hadoop.fs.s3a.aws.credentials.provider", "com.amazonaws.auth.DefaultAWSCredentialsProviderChain") \
     .getOrCreate()
 
 spark.sparkContext.setLogLevel("WARN")
