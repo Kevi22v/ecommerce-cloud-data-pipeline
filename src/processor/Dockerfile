@@ -1,21 +1,18 @@
-# Use a lightweight Python image
 FROM python:3.9-slim
 
-# Install Java 11 (IMPORTANT FIX)
+# Install the default headless Java (bulletproof against OS updates)
 RUN apt-get update && \
-    apt-get install -y openjdk-11-jdk procps && \
+    apt-get install -y default-jre-headless procps && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Set JAVA_HOME properly
-ENV JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
+# Point to the default Java path
+ENV JAVA_HOME=/usr/lib/jvm/default-java
 ENV PATH=$JAVA_HOME/bin:$PATH
 
 WORKDIR /app
-
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-
 COPY processor.py .
 
 CMD ["python", "processor.py"]
