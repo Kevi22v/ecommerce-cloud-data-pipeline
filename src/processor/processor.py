@@ -6,8 +6,9 @@ from pyspark.sql.types import StructType, StructField, StringType, DoubleType, T
 # 1. Initialize the Spark Session
 spark = SparkSession.builder \
     .appName("EcommerceRealTimeProcessor") \
+    .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.1") \
     .getOrCreate()
-
+    
 spark.sparkContext.setLogLevel("WARN")
 
 # Fetch database credentials securely injected by Kubernetes ConfigMap and Secret
