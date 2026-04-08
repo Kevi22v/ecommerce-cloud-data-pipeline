@@ -1,44 +1,55 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta http-equiv="refresh" content="3"> 
-    <title>E-Commerce Flash Sale Live</title>
+    <title>Live E-Commerce Sales</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
-        body { font-family: Arial, sans-serif; background-color: #f4f4f9; padding: 20px; }
-        h1 { color: #333; text-align: center; }
-        table { width: 100%; border-collapse: collapse; margin-top: 20px; background: white; }
-        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
-        th { background-color: #0056b3; color: white; }
-        .anomaly { background-color: #ffcccc; color: #990000; font-weight: bold; }
+        body { font-family: Arial, sans-serif; background-color: #f4f4f9; text-align: center; padding: 50px; }
+        .chart-container { width: 800px; margin: auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0px 4px 10px rgba(0,0,0,0.1); }
     </style>
 </head>
 <body>
 
-    <h1>🚀 Live Flash Sale Analytics</h1>
-    
-    <table>
-        <thead>
-            <tr>
-                <th>Order ID</th>
-                <th>User ID</th>
-                <th>Item Purchased</th>
-                <th>Price ($)</th>
-                <th>Status</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for order in orders %}
-            <tr class="{% if order[4] %}anomaly{% endif %}">
-                <td>{{ order[0][:8] }}...</td>
-                <td>{{ order[1] }}</td>
-                <td>{{ order[2] }}</td>
-                <td>${{ order[3] }}</td>
-                <td>{% if order[4] %}⚠️ FRAUD ALERT{% else %}✅ Verified{% endif %}</td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+    <h2>Live Revenue by Product</h2>
+    <div class="chart-container">
+        <canvas id="salesChart"></canvas>
+    </div>
 
+    <script>
+        let salesChart;
+
+        async function fetchLiveSales() {
+            const response = await fetch('/api/live-sales');
+            const data = await response.json();
+
+            if (data.error) return; // Wait quietly if PySpark hasn't created the table yet
+
+            const labels = data.map(d => d.item);
+            const revenues = data.map(d => d.revenue);
+
+            if (salesChart) {
+                salesChart.data.labels = labels;
+                salesChart.data.datasets[0].data = revenues;
+                salesChart.update();
+            } else {
+                const ctx = document.getElementById('salesChart').getContext('2d');
+                salesChart = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: 'Total Revenue ($)',
+                            data: revenues,
+                            backgroundColor: '#36A2EB'
+                        }]
+                    },
+                    options: { animation: false } // Disable animation for clean live refreshing
+                });
+            }
+        }
+
+        // Auto-refresh the chart every 3 seconds!
+        setInterval(fetchLiveSales, 3000);
+    </script>
 </body>
 </html>

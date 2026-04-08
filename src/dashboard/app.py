@@ -4,39 +4,48 @@ from flask import Flask, render_template, jsonify
 
 app = Flask(__name__)
 
-# Read Cloud Variables
-DB_HOST = os.environ["DB_HOST"]
-DB_NAME = os.environ["DB_NAME"]
-DB_USER = os.environ["DB_USER"]
-DB_PASSWORD = os.environ["DB_PASSWORD"]
+# Kubernetes will automatically inject these via ConfigMap & Secret!
+DB_HOST = os.environ.get("DB_HOST")
+DB_NAME = os.environ.get("DB_NAME", "ecommerce_db")
+DB_USER = os.environ.get("DB_USER", "dbadmin")
+DB_PASSWORD = os.environ.get("DB_PASSWORD")
 
 def get_db_connection():
-    conn = psycopg2.connect(
+    return psycopg2.connect(
         host=DB_HOST,
         dbname=DB_NAME,
         user=DB_USER,
         password=DB_PASSWORD
     )
-    return conn
 
 @app.route('/')
 def index():
-    """Fetch the latest orders and display them on the homepage."""
+    return render_template('index.html')
+
+@app.route('/api/live-sales')
+def live_sales():
     try:
         conn = get_db_connection()
-        cursor = conn.cursor()
+        cur = conn.cursor()
         
-        # Get the 15 most recent orders, sorted by time
-        cursor.execute("SELECT order_id, user_id, item, price, is_anomaly_injected FROM orders ORDER BY timestamp DESC LIMIT 15;")
-        orders = cursor.fetchall()
-        
-        cursor.close()
+        # Query the live_conversions table that PySpark is writing to
+        cur.execute("""
+            SELECT item, COUNT(*) as total_sales, SUM(price) as total_revenue
+            FROM live_conversions
+            GROUP BY item
+            ORDER BY total_revenue DESC
+            LIMIT 5;
+        """)
+        rows = cur.fetchall()
+        cur.close()
         conn.close()
-        
-        return render_template('index.html', orders=orders)
+
+        # Format data for the frontend chart
+        data = [{"item": row[0], "sales": row[1], "revenue": float(row[2])} for row in rows]
+        return jsonify(data)
     except Exception as e:
-        return f"Database connection error: {e}"
+        print(f"Database error: {e}")
+        return jsonify({"error": "Waiting for PySpark to write data..."}), 500
 
 if __name__ == '__main__':
-    # Run the web server on port 5000
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5000)
