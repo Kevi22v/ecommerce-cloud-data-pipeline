@@ -112,15 +112,24 @@ spec:
       - name: processor
         image: vivek22v/ecommerce-processor:latest
         imagePullPolicy: Always
+
         envFrom:
         - configMapRef:
             name: ecommerce-config
+
         env:
+          - name: DB_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: ecommerce-secrets
+                key: DB_PASSWORD
+
           - name: AWS_ACCESS_KEY_ID
             valueFrom:
               secretKeyRef:
                 name: ecommerce-secrets
                 key: AWS_ACCESS_KEY
+
           - name: AWS_SECRET_ACCESS_KEY
             valueFrom:
               secretKeyRef:

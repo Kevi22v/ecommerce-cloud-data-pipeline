@@ -62,6 +62,14 @@ joined_df = clicks_watermarked.alias("c").join(
         o.timestamp >= c.event_time AND
         o.timestamp <= c.event_time + interval 1 hour
     """)
+).select(
+    col("c.user_id").alias("user_id"),
+    col("c.event_time"),
+    col("c.page_url"),
+    col("o.order_id"),
+    col("o.item"),
+    col("o.price"),
+    col("o.timestamp").alias("order_time")
 )
 
 # 6. Write to Hot Storage (AWS RDS / PostgreSQL)
