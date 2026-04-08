@@ -1,12 +1,12 @@
-FROM python:3.9-slim
+# We use the 'bullseye' tag because Debian 11 natively supports Java 11
+FROM python:3.9-bullseye
 
-# Install the default headless Java (bulletproof against OS updates)
+# Because we are on Bullseye, default-jre safely installs Java 11
 RUN apt-get update && \
     apt-get install -y default-jre-headless procps && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Point to the default Java path
 ENV JAVA_HOME=/usr/lib/jvm/default-java
 ENV PATH=$JAVA_HOME/bin:$PATH
 
