@@ -19,6 +19,9 @@ DB_URL = f"jdbc:postgresql://{DB_HOST}:5432/ecommerce_db"
 DB_USER = os.environ.get("DB_USER", "dbadmin")
 DB_PASS = os.environ.get("DB_PASSWORD", "fallback_pass")
 
+# Pull the dynamic S3 bucket name from the new ConfigMap
+S3_BUCKET = os.environ.get("S3_BUCKET", "fallback-bucket-name")
+
 # 2. Define the JSON Schemas
 click_schema = StructType([
     StructField("user_id", StringType(), True),
@@ -146,9 +149,6 @@ inventory_query = inventory_df.writeStream \
     .foreachBatch(write_inventory) \
     .option("checkpointLocation", f"s3a://{S3_BUCKET}/checkpoints/inventory/") \
     .start()
-
-# Pull the dynamic S3 bucket name from the new ConfigMap
-S3_BUCKET = os.environ.get("S3_BUCKET", "fallback-bucket-name")
 
 # Write to Cold Storage (AWS S3 Data Lake)
 s3_query = joined_df.writeStream \
