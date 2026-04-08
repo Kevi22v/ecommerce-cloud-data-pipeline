@@ -62,7 +62,7 @@ spec:
         - name: KAFKA_ZOOKEEPER_CONNECT
           value: zookeeper-service:2181
         - name: KAFKA_CREATE_TOPICS
-          value: "ecommerce_orders:1:1" # Automatically creates your topic!
+          value: "ecommerce_orders:1:1,ecommerce_clickstream:1:1,ecommerce_inventory:1:1"
 
 ---
 apiVersion: v1

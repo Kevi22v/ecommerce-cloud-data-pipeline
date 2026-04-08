@@ -22,8 +22,8 @@ DB_PASS = os.environ.get("DB_PASSWORD", "fallback_pass")
 # 2. Define the JSON Schemas
 click_schema = StructType([
     StructField("user_id", StringType(), True),
-    StructField("event_time", TimestampType(), True),
-    StructField("page_url", StringType(), True)
+    StructField("timestamp", TimestampType(), True),
+    StructField("url", StringType(), True)
 ])
 
 order_schema = StructType([
@@ -32,6 +32,14 @@ order_schema = StructType([
     StructField("item", StringType(), True),
     StructField("price", DoubleType(), True),
     StructField("timestamp", TimestampType(), True), # Using timestamp as time
+])
+
+inventory_schema = StructType([
+    StructField("update_id", StringType(), True),
+    StructField("sku", StringType(), True),
+    StructField("warehouse", StringType(), True),
+    StructField("quantity_change", DoubleType(), True),
+    StructField("timestamp", TimestampType(), True)
 ])
 
 # 3. Read Real-Time Streams from Kafka
@@ -44,28 +52,30 @@ def read_kafka_topic(topic_name, schema):
         .load()
     
     return df.select(from_json(col("value").cast("string"), schema).alias("data")) \
-             .select("data.*")
+             .select("data.*") \
+             .withColumn("timestamp", expr("to_timestamp(timestamp)"))
 
 # Listen to the exact topics from your ConfigMap
 clicks_df = read_kafka_topic("ecommerce_clickstream", click_schema)
 orders_df = read_kafka_topic("ecommerce_orders", order_schema)
+inventory_df = read_kafka_topic("ecommerce_inventory", inventory_schema)
 
 # 4. Apply Watermarking (Handles late-arriving data)
-clicks_watermarked = clicks_df.withWatermark("event_time", "5 minutes")
+clicks_watermarked = clicks_df.withWatermark("timestamp", "5 minutes")
 orders_watermarked = orders_df.withWatermark("timestamp", "5 minutes")
-
+inventory_watermarked = inventory_df.withWatermark("timestamp", "5 minutes")
 # 5. Complex Windowed Join
 joined_df = clicks_watermarked.alias("c").join(
     orders_watermarked.alias("o"),
     expr("""
         c.user_id = o.user_id AND
-        o.timestamp >= c.event_time AND
-        o.timestamp <= c.event_time + interval 1 hour
+        o.timestamp >= c.timestamp AND
+        o.timestamp <= c.timestamp + interval 1 hour
     """)
 ).select(
     col("c.user_id").alias("user_id"),
-    col("c.event_time"),
-    col("c.page_url"),
+    col("c.timestamp"),
+    col("c.url"),
     col("o.order_id"),
     col("o.item"),
     col("o.price"),
@@ -83,10 +93,58 @@ def write_to_rds(df, epoch_id):
         .option("driver", "org.postgresql.Driver") \
         .mode("append") \
         .save()
+    
+def write_orders(df, epoch_id):
+    df.write \
+        .format("jdbc") \
+        .option("url", DB_URL) \
+        .option("dbtable", "orders") \
+        .option("user", DB_USER) \
+        .option("password", DB_PASS) \
+        .option("driver", "org.postgresql.Driver") \
+        .mode("append") \
+        .save()
 
+def write_clicks(df, epoch_id):
+    df.write \
+        .format("jdbc") \
+        .option("url", DB_URL) \
+        .option("dbtable", "clicks") \
+        .option("user", DB_USER) \
+        .option("password", DB_PASS) \
+        .option("driver", "org.postgresql.Driver") \
+        .mode("append") \
+        .save()
+    
+def write_inventory(df, epoch_id):
+    df.write \
+        .format("jdbc") \
+        .option("url", DB_URL) \
+        .option("dbtable", "inventory") \
+        .option("user", DB_USER) \
+        .option("password", DB_PASS) \
+        .option("driver", "org.postgresql.Driver") \
+        .mode("append") \
+        .save()
+    
 rds_query = joined_df.writeStream \
     .foreachBatch(write_to_rds) \
     .outputMode("append") \
+    .start()
+
+orders_query = orders_df.writeStream \
+    .foreachBatch(write_orders) \
+    .option("checkpointLocation", f"s3a://{S3_BUCKET}/checkpoints/orders/") \
+    .start()
+
+clicks_query = clicks_df.writeStream \
+    .foreachBatch(write_clicks) \
+    .option("checkpointLocation", f"s3a://{S3_BUCKET}/checkpoints/clicks/") \
+    .start()
+
+inventory_query = inventory_df.writeStream \
+    .foreachBatch(write_inventory) \
+    .option("checkpointLocation", f"s3a://{S3_BUCKET}/checkpoints/inventory/") \
     .start()
 
 # Pull the dynamic S3 bucket name from the new ConfigMap
@@ -96,7 +154,7 @@ S3_BUCKET = os.environ.get("S3_BUCKET", "fallback-bucket-name")
 s3_query = joined_df.writeStream \
     .format("parquet") \
     .option("path", f"s3a://{S3_BUCKET}/processed-data/") \
-    .option("checkpointLocation", f"s3a://{S3_BUCKET}/checkpoints/") \
+    .option("checkpointLocation", f"s3a://{S3_BUCKET}/checkpoints/conversions/") \
     .outputMode("append") \
     .start()
 

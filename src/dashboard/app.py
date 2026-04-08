@@ -32,6 +32,7 @@ def live_sales():
         cur.execute("""
             SELECT item, COUNT(*) as total_sales, SUM(price) as total_revenue
             FROM live_conversions
+            WHERE order_time > NOW() - INTERVAL '5 minutes'
             GROUP BY item
             ORDER BY total_revenue DESC
             LIMIT 5;
