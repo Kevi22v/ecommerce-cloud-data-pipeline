@@ -256,6 +256,22 @@ output "data_lake_bucket_name" {
 }
 
 # ==========================================
+# 6.5. IAM USER FOR SPARK S3 ACCESS
+# ==========================================
+resource "aws_iam_user" "processor_user" {
+  name = "ecommerce-processor-user"
+}
+
+resource "aws_iam_user_policy_attachment" "processor_s3" {
+  user       = aws_iam_user.processor_user.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonS3FullAccess"
+}
+
+resource "aws_iam_access_key" "processor_key" {
+  user = aws_iam_user.processor_user.name
+}
+
+# ==========================================
 # 7. ZERO-TOUCH KUBERNETES AUTOMATION
 # ==========================================
 # Connect Terraform to your EKS Cluster
@@ -272,7 +288,11 @@ provider "kubernetes" {
 # Auto-Inject Secret into Kubernetes
 resource "kubernetes_secret" "ecommerce_secrets" {
   metadata { name = "ecommerce-secrets" }
-  data = { DB_PASSWORD = random_password.db_password.result }
+  data = { 
+    DB_PASSWORD    = random_password.db_password.result
+    AWS_ACCESS_KEY = aws_iam_access_key.processor_key.id
+    AWS_SECRET_KEY = aws_iam_access_key.processor_key.secret
+  }
 }
 
 # Auto-Inject ConfigMap into Kubernetes
