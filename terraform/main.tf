@@ -317,3 +317,21 @@ data:
   KAFKA_TOPIC: "ecommerce_orders"
 EOF
 }
+
+# ==========================================
+# 9. AUTO-UPDATE LOCAL KUBECONFIG
+# ==========================================
+resource "null_resource" "update_kubeconfig" {
+  # This triggers every time the EKS cluster changes
+  triggers = {
+    cluster_name = aws_eks_cluster.eks.name
+    endpoint     = aws_eks_cluster.eks.endpoint
+  }
+
+  # This runs the exact terminal command on your local laptop!
+  provisioner "local-exec" {
+    command = "aws eks update-kubeconfig --region us-east-1 --name ${aws_eks_cluster.eks.name}"
+  }
+
+  depends_on = [aws_eks_cluster.eks]
+}
