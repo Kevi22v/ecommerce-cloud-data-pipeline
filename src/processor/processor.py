@@ -77,8 +77,8 @@ joined_df = clicks_watermarked.alias("c").join(
     """)
 ).select(
     col("c.user_id").alias("user_id"),
-    col("c.timestamp"),
-    col("c.url"),
+    col("c.timestamp").alias("event_time"), 
+    col("c.url").alias("page_url"),          
     col("o.order_id"),
     col("o.item"),
     col("o.price"),
