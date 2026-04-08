@@ -72,6 +72,7 @@ def write_to_rds(df, epoch_id):
         .option("dbtable", "live_conversions") \
         .option("user", DB_USER) \
         .option("password", DB_PASS) \
+        .option("driver", "org.postgresql.Driver") \
         .mode("append") \
         .save()
 
