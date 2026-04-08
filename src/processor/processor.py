@@ -77,11 +77,14 @@ rds_query = joined_df.writeStream \
     .outputMode("append") \
     .start()
 
-# 7. Write to Cold Storage (AWS S3 Data Lake) -> USING YOUR EXACT BUCKET
+# Pull the dynamic S3 bucket name from the new ConfigMap
+S3_BUCKET = os.environ.get("S3_BUCKET", "fallback-bucket-name")
+
+# Write to Cold Storage (AWS S3 Data Lake)
 s3_query = joined_df.writeStream \
     .format("parquet") \
-    .option("path", "s3a://ecommerce-datalake-1b5e978b/processed-data/") \
-    .option("checkpointLocation", "s3a://ecommerce-datalake-1b5e978b/checkpoints/") \
+    .option("path", f"s3a://{S3_BUCKET}/processed-data/") \
+    .option("checkpointLocation", f"s3a://{S3_BUCKET}/checkpoints/") \
     .outputMode("append") \
     .start()
 
