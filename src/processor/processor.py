@@ -1,6 +1,6 @@
 import os
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, from_json, expr
+from pyspark.sql.functions import col, from_json, expr, when
 from pyspark.sql.types import StructType, StructField, StringType, DoubleType, TimestampType
 
 # 1. Initialize the Spark Session
@@ -62,6 +62,11 @@ def read_kafka_topic(topic_name, schema):
 clicks_df = read_kafka_topic("ecommerce_clickstream", click_schema)
 orders_df = read_kafka_topic("ecommerce_orders", order_schema)
 inventory_df = read_kafka_topic("ecommerce_inventory", inventory_schema)
+
+orders_df = orders_df.withColumn(
+    "is_anomaly_injected",
+    when(col("price") > 1000, True).otherwise(False)
+)
 
 # 4. Apply Watermarking (Handles late-arriving data)
 clicks_watermarked = clicks_df.withWatermark("timestamp", "5 minutes")

@@ -1,55 +1,123 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Live E-Commerce Sales</title>
+    <title>Live E-Commerce Dashboard</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
-        body { font-family: Arial, sans-serif; background-color: #f4f4f9; text-align: center; padding: 50px; }
-        .chart-container { width: 800px; margin: auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0px 4px 10px rgba(0,0,0,0.1); }
+        body {
+            font-family: Arial;
+            background: #0f172a;
+            color: white;
+            text-align: center;
+        }
+
+        h1 { margin-bottom: 30px; }
+
+        .stats {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .card {
+            background: #1e293b;
+            padding: 20px;
+            border-radius: 10px;
+            width: 200px;
+            box-shadow: 0px 4px 10px rgba(0,0,0,0.3);
+        }
+
+        .card h3 {
+            margin: 0;
+            font-size: 16px;
+            color: #94a3b8;
+        }
+
+        .card p {
+            font-size: 24px;
+            margin: 10px 0 0;
+            font-weight: bold;
+        }
+
+        .chart-container {
+            width: 800px;
+            margin: auto;
+            background: #1e293b;
+            padding: 20px;
+            border-radius: 10px;
+        }
     </style>
 </head>
 <body>
 
-    <h2>Live Revenue by Product</h2>
-    <div class="chart-container">
-        <canvas id="salesChart"></canvas>
+<h1>📊 Live E-Commerce Dashboard</h1>
+
+<div class="stats">
+    <div class="card">
+        <h3>Total Orders</h3>
+        <p id="orders">0</p>
     </div>
+    <div class="card">
+        <h3>Total Revenue ($)</h3>
+        <p id="revenue">0</p>
+    </div>
+    <div class="card">
+        <h3>Avg Order Value</h3>
+        <p id="avg">0</p>
+    </div>
+</div>
 
-    <script>
-        let salesChart;
+<div class="chart-container">
+    <canvas id="salesChart"></canvas>
+</div>
 
-        async function fetchLiveSales() {
-            const response = await fetch('/api/live-sales');
-            const data = await response.json();
+<script>
+let salesChart;
 
-            if (data.error) return; // Wait quietly if PySpark hasn't created the table yet
+async function fetchData() {
+    const res = await fetch('/api/live-sales');
+    const data = await res.json();
 
-            const labels = data.map(d => d.item);
-            const revenues = data.map(d => d.revenue);
+    if (data.error) return;
 
-            if (salesChart) {
-                salesChart.data.labels = labels;
-                salesChart.data.datasets[0].data = revenues;
-                salesChart.update();
-            } else {
-                const ctx = document.getElementById('salesChart').getContext('2d');
-                salesChart = new Chart(ctx, {
-                    type: 'bar',
-                    data: {
-                        labels: labels,
-                        datasets: [{
-                            label: 'Total Revenue ($)',
-                            data: revenues,
-                            backgroundColor: '#36A2EB'
-                        }]
-                    },
-                    options: { animation: false } // Disable animation for clean live refreshing
-                });
+    // Update stats
+    document.getElementById("orders").innerText = data.stats.orders;
+    document.getElementById("revenue").innerText = "$" + data.stats.revenue.toFixed(2);
+    document.getElementById("avg").innerText = "$" + data.stats.avg_order.toFixed(2);
+
+    const labels = data.chart.map(d => d.item);
+    const revenues = data.chart.map(d => d.revenue);
+
+    if (salesChart) {
+        salesChart.data.labels = labels;
+        salesChart.data.datasets[0].data = revenues;
+        salesChart.update();
+    } else {
+        const ctx = document.getElementById('salesChart').getContext('2d');
+        salesChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Revenue',
+                    data: revenues,
+                    backgroundColor: '#38bdf8'
+                }]
+            },
+            options: {
+                animation: false,
+                plugins: {
+                    legend: { display: false }
+                }
             }
-        }
+        });
+    }
+}
 
-        // Auto-refresh the chart every 3 seconds!
-        setInterval(fetchLiveSales, 3000);
-    </script>
+// refresh every 3 sec
+setInterval(fetchData, 3000);
+</script>
+
 </body>
 </html>

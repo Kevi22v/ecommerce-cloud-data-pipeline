@@ -27,26 +27,44 @@ def live_sales():
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        
-        # Query the live_conversions table that PySpark is writing to
+
+        # Main chart data
         cur.execute("""
             SELECT item, COUNT(*) as total_sales, SUM(price) as total_revenue
             FROM live_conversions
-            WHERE order_time > NOW() - INTERVAL '5 minutes'
+            WHERE order_time > NOW() - INTERVAL '15 minutes'
             GROUP BY item
             ORDER BY total_revenue DESC
             LIMIT 5;
         """)
         rows = cur.fetchall()
+
+        # KPI metrics
+        cur.execute("""
+            SELECT 
+                COUNT(*) as total_orders,
+                COALESCE(SUM(price),0) as total_revenue,
+                COALESCE(AVG(price),0) as avg_order_value
+            FROM live_conversions
+            WHERE order_time > NOW() - INTERVAL '15 minutes';
+        """)
+        stats = cur.fetchone()
+
         cur.close()
         conn.close()
 
-        # Format data for the frontend chart
-        data = [{"item": row[0], "sales": row[1], "revenue": float(row[2])} for row in rows]
-        return jsonify(data)
+        return jsonify({
+            "chart": [{"item": r[0], "sales": r[1], "revenue": float(r[2])} for r in rows],
+            "stats": {
+                "orders": stats[0],
+                "revenue": float(stats[1]),
+                "avg_order": float(stats[2])
+            }
+        })
+
     except Exception as e:
         print(f"Database error: {e}")
-        return jsonify({"error": "Waiting for PySpark to write data..."}), 500
+        return jsonify({"error": "Waiting for data..."}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
