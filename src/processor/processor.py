@@ -1,7 +1,7 @@
 import os
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, from_json, expr, when
-from pyspark.sql.types import StructType, StructField, StringType, DoubleType, TimestampType
+from pyspark.sql.types import StructType, StructField, StringType, DoubleType, TimestampType, BooleanType
 
 # 1. Initialize the Spark Session
 spark = SparkSession.builder \
@@ -9,6 +9,8 @@ spark = SparkSession.builder \
     .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.1,org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262,org.postgresql:postgresql:42.6.0") \
     .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
     .config("spark.hadoop.fs.s3a.aws.credentials.provider", "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider") \
+    .config("spark.ui.prometheus.enabled", "true") \
+    .config("spark.metrics.conf.*.sink.prometheusServlet.class", "org.apache.spark.metrics.sink.PrometheusServlet") \
     .getOrCreate()
 
 spark.sparkContext.setLogLevel("WARN")
@@ -32,9 +34,9 @@ click_schema = StructType([
 order_schema = StructType([
     StructField("order_id", StringType(), True),
     StructField("user_id", StringType(), True),
-    StructField("item", StringType(), True),
-    StructField("price", DoubleType(), True),
-    StructField("timestamp", TimestampType(), True), # Using timestamp as time
+    StructField("amount", DoubleType(), True), # MATCHES GENERATOR
+    StructField("timestamp", TimestampType(), True),
+    StructField("anomaly_flag", BooleanType(), True) # MATCHES GENERATOR
 ])
 
 inventory_schema = StructType([
@@ -65,7 +67,7 @@ inventory_df = read_kafka_topic("ecommerce_inventory", inventory_schema)
 
 orders_df = orders_df.withColumn(
     "is_anomaly_injected",
-    when(col("price") > 1000, True).otherwise(False)
+    when(col("amount") > 1000, True).otherwise(False)
 )
 
 # 4. Apply Watermarking (Handles late-arriving data)
@@ -85,8 +87,8 @@ joined_df = clicks_watermarked.alias("c").join(
     col("c.timestamp").alias("event_time"), 
     col("c.url").alias("page_url"),          
     col("o.order_id"),
-    col("o.item"),
-    col("o.price"),
+    col("o.amount").alias("price"), 
+    col("o.is_anomaly_injected"),   
     col("o.timestamp").alias("order_time")
 )
 
@@ -137,6 +139,7 @@ def write_inventory(df, epoch_id):
     
 rds_query = joined_df.writeStream \
     .foreachBatch(write_to_rds) \
+    .option("checkpointLocation", f"s3a://{S3_BUCKET}/checkpoints/rds_conversions/") \
     .outputMode("append") \
     .start()
 
