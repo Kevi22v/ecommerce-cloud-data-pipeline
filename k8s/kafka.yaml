@@ -75,3 +75,32 @@ spec:
   ports:
     - port: 9092
       targetPort: 9092
+
+# ==========================================
+# 3. KAFKA EXPORTER (For Prometheus Monitoring)
+# ==========================================
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka-exporter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kafka-exporter
+  template:
+    metadata:
+      labels:
+        app: kafka-exporter
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9308"
+    spec:
+      containers:
+      - name: kafka-exporter
+        image: danielqsj/kafka-exporter
+        args:
+          - "--kafka.server=kafka-service:9092"
+        ports:
+        - containerPort: 9308

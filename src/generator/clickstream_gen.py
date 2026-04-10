@@ -5,14 +5,20 @@ import random
 import uuid
 from faker import Faker
 from confluent_kafka import Producer
+from prometheus_client import start_http_server, Counter
 
 # Initialize Faker
 fake = Faker()
 
 # Cloud Native Environment Variables
 KAFKA_BROKER = os.environ.get("KAFKA_BROKER", "localhost:29092")
-# Notice we are using a BRAND NEW Kafka topic for this data stream!
 KAFKA_TOPIC = os.environ.get("KAFKA_CLICKSTREAM_TOPIC", "ecommerce_clickstream") 
+
+# 👈 NEW: Configurable Speed Control via Kubernetes
+SLEEP_MIN = float(os.environ.get("SLEEP_MIN", "0.1"))
+SLEEP_MAX = float(os.environ.get("SLEEP_MAX", "0.5"))
+
+CLICKS_GENERATED = Counter('ecommerce_clickstream_total', 'Total clickstream events generated')
 
 print(f"Connecting to Kafka Broker at: {KAFKA_BROKER}")
 conf = {'bootstrap.servers': KAFKA_BROKER}
@@ -52,7 +58,10 @@ def generate_click():
 
 if __name__ == "__main__":
     print(f"Starting Clickstream Generator. Sending to topic: {KAFKA_TOPIC}...")
-    
+
+    print("Starting Prometheus metrics server on port 5000...")
+    start_http_server(5000)
+
     try:
         while True:
             click_data = generate_click()
@@ -68,10 +77,12 @@ if __name__ == "__main__":
             )
             
             producer.poll(0)
+
+            CLICKS_GENERATED.inc()
             
-            # Web traffic moves faster than orders! Generating a click every 0.1 to 0.5 seconds
-            time.sleep(random.uniform(0.1, 0.5)) 
+            # 👈 NEW: Uses the environment variables to control the speed
+            time.sleep(random.uniform(SLEEP_MIN, SLEEP_MAX)) 
             
     except KeyboardInterrupt:
-        producer.flush()
+        producer.flush(timeout=3.0) # 👈 Added the 3-second safety net
         print("\nClickstream Generator stopped manually.")

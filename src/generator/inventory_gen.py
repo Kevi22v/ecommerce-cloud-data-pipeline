@@ -4,11 +4,17 @@ import time
 import random
 import uuid
 from confluent_kafka import Producer
+from prometheus_client import start_http_server, Counter
 
 # Cloud Native Environment Variables
 KAFKA_BROKER = os.environ.get("KAFKA_BROKER", "localhost:29092")
-# Another brand new topic!
 KAFKA_TOPIC = os.environ.get("KAFKA_INVENTORY_TOPIC", "ecommerce_inventory") 
+
+# 👈 NEW: Configurable Speed Control via Kubernetes
+SLEEP_MIN = float(os.environ.get("SLEEP_MIN", "0.5"))
+SLEEP_MAX = float(os.environ.get("SLEEP_MAX", "1.5"))
+
+INVENTORY_UPDATES = Counter('ecommerce_inventory_total', 'Total inventory updates generated')
 
 print(f"Connecting to Kafka Broker at: {KAFKA_BROKER}")
 conf = {'bootstrap.servers': KAFKA_BROKER}
@@ -44,6 +50,9 @@ def generate_inventory_update():
 if __name__ == "__main__":
     print(f"Starting Inventory Generator. Sending to topic: {KAFKA_TOPIC}...")
     
+    print("Starting Prometheus metrics server on port 5000...")
+    start_http_server(5000)
+
     try:
         while True:
             inventory_data, is_late = generate_inventory_update()
@@ -60,10 +69,12 @@ if __name__ == "__main__":
             )
             
             producer.poll(0)
+
+            INVENTORY_UPDATES.inc()
             
-            # Inventory updates are slower than web clicks. 
-            time.sleep(random.uniform(0.5, 1.5)) 
+            # 👈 NEW: Uses the environment variables to control the speed
+            time.sleep(random.uniform(SLEEP_MIN, SLEEP_MAX)) 
             
     except KeyboardInterrupt:
-        producer.flush(timeout=3.0) # Added the 3-second safety net here too!
+        producer.flush(timeout=3.0) 
         print("\nInventory Generator stopped manually.")

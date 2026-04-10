@@ -1,2 +1,4 @@
 faker==24.4.0
 confluent-kafka==2.3.0
+prometheus-flask-exporter==0.23.0
+prometheus-client==0.17.1

@@ -14,12 +14,17 @@ spec:
     metadata:
       labels:
         app: order-generator
+      annotations:                     
+        prometheus.io/scrape: "true"   
+        prometheus.io/port: "5000"   
+        prometheus.io/path: "/metrics"
     spec:
       containers:
       - name: generator
         image: vivek22v/ecommerce-generator:latest
         imagePullPolicy: Always
-        # This tells this specific pod to run the Order script
+        ports:
+        - containerPort: 5000
         command: ["python", "order_gen.py"]
         envFrom:
         - configMapRef:
@@ -27,6 +32,10 @@ spec:
         env:
         - name: KAFKA_ORDER_TOPIC
           value: "ecommerce_orders"
+        - name: SLEEP_MIN
+          value: "0.5"
+        - name: SLEEP_MAX
+          value: "2.0"
 
 ---
 # ==========================================
@@ -45,12 +54,17 @@ spec:
     metadata:
       labels:
         app: clickstream-generator
+      annotations:                     
+        prometheus.io/scrape: "true"   
+        prometheus.io/port: "5000" 
+        prometheus.io/path: "/metrics"
     spec:
       containers:
       - name: generator
         image: vivek22v/ecommerce-generator:latest
         imagePullPolicy: Always
-        # This tells this specific pod to run the Clickstream script
+        ports:
+        - containerPort: 5000
         command: ["python", "clickstream_gen.py"]
         envFrom:
         - configMapRef:
@@ -58,6 +72,10 @@ spec:
         env:
         - name: KAFKA_CLICKSTREAM_TOPIC
           value: "ecommerce_clickstream"
+        - name: SLEEP_MIN
+          value: "0.1"
+        - name: SLEEP_MAX
+          value: "0.5"
 
 ---
 # ==========================================
@@ -76,12 +94,17 @@ spec:
     metadata:
       labels:
         app: inventory-generator
+      annotations:                     
+        prometheus.io/scrape: "true"   
+        prometheus.io/port: "5000"     
+        prometheus.io/path: "/metrics"
     spec:
       containers:
       - name: generator
         image: vivek22v/ecommerce-generator:latest
         imagePullPolicy: Always
-        # This tells this specific pod to run the Inventory script
+        ports:
+        - containerPort: 5000
         command: ["python", "inventory_gen.py"]
         envFrom:
         - configMapRef:
@@ -89,6 +112,10 @@ spec:
         env:
         - name: KAFKA_INVENTORY_TOPIC
           value: "ecommerce_inventory"
+        - name: SLEEP_MIN
+          value: "0.5"
+        - name: SLEEP_MAX
+          value: "1.5"
 
 ---
 # ==========================================
@@ -107,29 +134,31 @@ spec:
     metadata:
       labels:
         app: processor
+      annotations:                     
+        prometheus.io/scrape: "true"   
+        prometheus.io/port: "4040"     
+        prometheus.io/path: "/metrics/prometheus"
     spec:
       containers:
       - name: processor
         image: vivek22v/ecommerce-processor:latest
         imagePullPolicy: Always
-
+        ports:
+        - containerPort: 4040 
         envFrom:
         - configMapRef:
             name: ecommerce-config
-
         env:
           - name: DB_PASSWORD
             valueFrom:
               secretKeyRef:
                 name: ecommerce-secrets
                 key: DB_PASSWORD
-
           - name: AWS_ACCESS_KEY_ID
             valueFrom:
               secretKeyRef:
                 name: ecommerce-secrets
                 key: AWS_ACCESS_KEY
-
           - name: AWS_SECRET_ACCESS_KEY
             valueFrom:
               secretKeyRef:

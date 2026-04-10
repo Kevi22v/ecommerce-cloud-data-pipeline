@@ -1,8 +1,11 @@
 import os
 import psycopg2
 from flask import Flask, render_template, jsonify
+from flask import Flask, request, jsonify
+from prometheus_flask_exporter import PrometheusMetrics
 
 app = Flask(__name__)
+metrics = PrometheusMetrics(app)
 
 # Kubernetes will automatically inject these via ConfigMap & Secret!
 DB_HOST = os.environ.get("DB_HOST")
