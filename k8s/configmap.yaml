@@ -6,6 +6,6 @@ data:
   DB_HOST: "ecommerce-secure-db.ce7q08uos99n.us-east-1.rds.amazonaws.com"
   DB_NAME: "ecommerce_db"
   DB_USER: "dbadmin"
-  S3_BUCKET: "ecommerce-datalake-bc1145b1"
+  S3_BUCKET: "ecommerce-datalake-36cf0c06"
   KAFKA_BROKER: "kafka-service:9092"
   KAFKA_TOPIC: "ecommerce_orders"

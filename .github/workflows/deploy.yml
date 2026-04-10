@@ -33,6 +33,13 @@ jobs:
         push: true
         tags: ${{ secrets.DOCKERHUB_USERNAME }}/ecommerce-processor:latest
 
+    - name: Build and Push Dashboard Image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./src/dashboard
+        push: true
+        tags: ${{ secrets.DOCKERHUB_USERNAME }}/ecommerce-dashboard:latest
+
     - name: Configure AWS Credentials
       uses: aws-actions/configure-aws-credentials@v4
       with:
@@ -44,6 +51,8 @@ jobs:
       run: aws eks update-kubeconfig --region us-east-1 --name ecommerce-cluster
 
     - name: Deploy to EKS
+      # 👇 UPDATED: Ensure dashboard is restarted alongside the others 👇
       run: |
         kubectl apply -f k8s/apps.yaml
-        kubectl rollout restart deployment ecommerce-processor clickstream-generator order-generator inventory-generator
+        kubectl apply -f k8s/dashboard.yaml
+        kubectl rollout restart deployment ecommerce-processor clickstream-generator order-generator inventory-generator ecommerce-dashboard
