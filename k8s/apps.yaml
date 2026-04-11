@@ -167,8 +167,8 @@ spec:
                 key: AWS_SECRET_KEY
         resources:
           requests:
-            cpu: "150m"
-            memory: "256Mi"
+            cpu: "500m"
+            memory: "1Gi"
           limits:
-            cpu: "400m"      
-            memory: "400Mi"
+            cpu: "1"      
+            memory: "2Gi"
