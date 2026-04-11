@@ -12,7 +12,7 @@ print(f"Connecting Order Converter to Kafka at {KAFKA_BROKER}...")
 consumer_conf = {
     'bootstrap.servers': KAFKA_BROKER,
     'group.id': 'order-converter-group',
-    'auto.offset.reset': 'latest'
+    'auto.offset.reset': 'earliest'
 }
 consumer = Consumer(consumer_conf)
 consumer.subscribe([TOPIC_CARTS])
