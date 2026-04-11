@@ -147,7 +147,7 @@ resource "aws_eks_cluster" "eks" {
 }
 
 # ==========================================
-# 5. EKS WORKER NODES (Single Node for Lab Constraints)
+# 5. EKS WORKER NODES (Auto-Scaling Enabled)
 # ==========================================
 resource "aws_iam_role" "eks_nodes" {
   name = "ecommerce-eks-node-role"
@@ -169,10 +169,33 @@ resource "aws_iam_role_policy_attachment" "nodes_ecr" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
   role       = aws_iam_role.eks_nodes.name
 }
-
 resource "aws_iam_role_policy_attachment" "nodes_s3_access" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonS3FullAccess"
   role       = aws_iam_role.eks_nodes.name
+}
+
+resource "aws_iam_role_policy" "cluster_autoscaler_policy" {
+  name = "ecommerce-cluster-autoscaler-policy"
+  role = aws_iam_role.eks_nodes.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = [
+          "autoscaling:DescribeAutoScalingGroups",
+          "autoscaling:DescribeAutoScalingInstances",
+          "autoscaling:DescribeLaunchConfigurations",
+          "autoscaling:DescribeTags",
+          "autoscaling:SetDesiredCapacity",
+          "autoscaling:TerminateInstanceInAutoScalingGroup",
+          "ec2:DescribeLaunchTemplateVersions"
+        ]
+        Effect   = "Allow"
+        Resource = "*"
+      },
+    ]
+  })
 }
 
 resource "aws_eks_node_group" "node_group" {
@@ -182,12 +205,16 @@ resource "aws_eks_node_group" "node_group" {
   subnet_ids      = [aws_subnet.public_1.id, aws_subnet.public_2.id]
   instance_types  = ["t3.medium"] 
 
-  # Single Node setup 
   scaling_config {
     desired_size = 1
-    max_size     = 1
     min_size     = 1
+    max_size     = 4
   }
+  tags = {
+    "k8s.io/cluster-autoscaler/ecommerce-cluster" = "owned"
+    "k8s.io/cluster-autoscaler/enabled"           = "true"
+  }
+
   depends_on = [
     aws_iam_role_policy_attachment.nodes_policy,
     aws_iam_role_policy_attachment.nodes_cni,

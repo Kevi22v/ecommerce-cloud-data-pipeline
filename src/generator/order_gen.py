@@ -1,69 +1,84 @@
-import os
+# src/generator/order_gen.py
+from datetime import datetime
 import json
-import time
 import random
-import uuid
-from confluent_kafka import Producer
-from prometheus_client import start_http_server, Counter
+from confluent_kafka import Consumer, Producer, KafkaError, KafkaException
 
-# Cloud Native Environment Variables
-KAFKA_BROKER = os.environ.get("KAFKA_BROKER", "localhost:29092")
-KAFKA_TOPIC = os.environ.get("KAFKA_ORDER_TOPIC", "ecommerce_orders")
+from kafka_config import KAFKA_BROKER, TOPIC_CARTS, TOPIC_ORDERS
 
-# 👈 NEW: Configurable Speed Control via Kubernetes
-SLEEP_MIN = float(os.environ.get("SLEEP_MIN", "0.5"))
-SLEEP_MAX = float(os.environ.get("SLEEP_MAX", "2.0"))
+print(f"Connecting Order Converter to Kafka at {KAFKA_BROKER}...")
 
-ORDERS_GENERATED = Counter('ecommerce_orders_total', 'Total orders generated')
+# 1. SET UP CONSUMER (Read Carts)
+consumer_conf = {
+    'bootstrap.servers': KAFKA_BROKER,
+    'group.id': 'order-converter-group',
+    'auto.offset.reset': 'latest'
+}
+consumer = Consumer(consumer_conf)
+consumer.subscribe([TOPIC_CARTS])
 
-print(f"Connecting to Kafka Broker at: {KAFKA_BROKER}")
-producer = Producer({'bootstrap.servers': KAFKA_BROKER})
+# 2. SET UP PRODUCER (Send Orders)
+producer_conf = {
+    'bootstrap.servers': KAFKA_BROKER,
+    'client.id': 'order-producer'
+}
+producer = Producer(producer_conf)
 
 def delivery_report(err, msg):
     if err is not None:
-        print(f"Delivery failed: {err}")
+        pass # Keep terminal clean
 
-def generate_order():
-    """Generates an order with occasional Fraud Chaos."""
-    # We keep the fraud logic because it tests Spark's anomaly detection!
-    is_fraud = random.random() < 0.01 
-    amount = round(random.uniform(5000.0, 20000.0), 2) if is_fraud else round(random.uniform(10.0, 500.0), 2)
+CONVERSION_RATE = 0.30  
 
-    return {
-        "order_id": str(uuid.uuid4()),
-        "user_id": random.randint(1000, 9999),
-        "amount": amount,
-        "timestamp": int(time.time()),
-        "anomaly_flag": is_fraud 
-    }
+print("Connected! Listening for shopping carts (and passing along the chaos)...")
 
-if __name__ == "__main__":
-    print(f"Starting Order Generator on topic: {KAFKA_TOPIC}...")
-    print("Starting Prometheus metrics server on port 5000...")
-    start_http_server(5000)
-
-    try:
-        while True:
-            order_data = generate_order()
+try:
+    while True:
+        msg = consumer.poll(timeout=1.0)
+        if msg is None: continue
+        if msg.error():
+            if msg.error().code() == KafkaError._PARTITION_EOF: continue
+            else: raise KafkaException(msg.error())
+                
+        cart_data = json.loads(msg.value().decode('utf-8'))
+        
+        # Seed random with the cart_id. If a duplicate cart arrives, 
+        # it will make the exact same buy/abandon decision!
+        random.seed(cart_data["cart_id"]) 
+        
+        if random.random() <= CONVERSION_RATE:
             
-            # Print warnings for Fraud
-            if order_data["anomaly_flag"]:
-                print(f"⚠️ FRAUD ALERT: Massive order of ${order_data['amount']} from User [{order_data['user_id']}]")
-            else:
-                print(f"Order: User [{order_data['user_id']}] spent ${order_data['amount']}")
+            # Reset the seed so delivery speeds stay random across different orders
+            random.seed() 
+            delivery_speed = random.choices(["Standard", "Prime", "Urgent"], weights=[0.60, 0.30, 0.10])[0]
             
+            # We copy the cart to keep ALL bad data, late timestamps, and new schema fields intact.
+            order_data = cart_data.copy()
+            
+            # We create a deterministic Order ID based on the Cart ID for deduplication tests
+            order_data["order_id"] = f"ord_{cart_data['cart_id']}"
+            order_data["order_timestamp"] = datetime.utcnow().isoformat()
+            order_data["delivery_speed"] = delivery_speed
+            order_data["status"] = "Pending"
+            
+            # Send to Kafka
             producer.produce(
-                topic=KAFKA_TOPIC, 
-                value=json.dumps(order_data).encode('utf-8'), 
+                topic=TOPIC_ORDERS,
+                value=json.dumps(order_data).encode('utf-8'),
                 callback=delivery_report
             )
             producer.poll(0)
             
-            ORDERS_GENERATED.inc()
+            chaos_flag = order_data.get("chaos_type", "CLEAN")
+            print(f"SALE! Order {order_data['order_id'][:12]} generated. [Status: {chaos_flag}]")
+        
+        else:
+            chaos_flag = cart_data.get("chaos_type", "CLEAN")
+            print(f"Abandoned: Cart {cart_data['cart_id'][:8]} left behind. [Status: {chaos_flag}]")
 
-            # 👈 NEW: Uses the environment variables to control the speed
-            time.sleep(random.uniform(SLEEP_MIN, SLEEP_MAX))
-            
-    except KeyboardInterrupt:
-        producer.flush(timeout=3.0)
-        print("\nOrder Generator stopped manually.")
+except KeyboardInterrupt:
+    print("\nStopping Order Converter...")
+finally:
+    consumer.close()
+    print("Flushing final messages...")
+    producer.flush()

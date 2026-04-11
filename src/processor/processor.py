@@ -1,11 +1,14 @@
 import os
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, from_json, expr, when
-from pyspark.sql.types import StructType, StructField, StringType, DoubleType, TimestampType, BooleanType
+from pyspark.sql.functions import col, from_json, expr, window, sum, count, to_json, explode
+from pyspark.sql.types import StructType, StructField, StringType, DoubleType, TimestampType, IntegerType, ArrayType
 
-# 1. Initialize the Spark Session
+
+# ==========================================
+# 1. INITIALIZE SPARK
+# ==========================================
 spark = SparkSession.builder \
-    .appName("EcommerceRealTimeProcessor") \
+    .appName("EcommerceChaosProcessor") \
     .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.1,org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262,org.postgresql:postgresql:42.6.0") \
     .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
     .config("spark.hadoop.fs.s3a.aws.credentials.provider", "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider") \
@@ -15,156 +18,157 @@ spark = SparkSession.builder \
 
 spark.sparkContext.setLogLevel("WARN")
 
-# Fetch database credentials securely injected by Kubernetes ConfigMap and Secret
-DB_HOST = os.environ.get("DB_HOST", "localhost")
+# ==========================================
+# 2. CREDENTIALS & CONFIG
+# ==========================================
+DB_HOST = os.environ.get("DB_HOST", "postgres-service") # Matches Kubernetes DNS
 DB_URL = f"jdbc:postgresql://{DB_HOST}:5432/ecommerce_db" 
 DB_USER = os.environ.get("DB_USER", "dbadmin")
 DB_PASS = os.environ.get("DB_PASSWORD", "fallback_pass")
-
-# Pull the dynamic S3 bucket name from the new ConfigMap
 S3_BUCKET = os.environ.get("S3_BUCKET", "fallback-bucket-name")
+KAFKA_BROKER = os.environ.get("KAFKA_BROKER", "kafka-service:9092")
 
-# 2. Define the JSON Schemas
-click_schema = StructType([
+# ==========================================
+# 3. SCHEMA DEFINITIONS (With Schema Evolution buffers)
+# ==========================================
+item_schema = ArrayType(StructType([
+    StructField("category", StringType(), True),
+    StructField("item_name", StringType(), True),
+    StructField("unit_price", DoubleType(), True),
+    StructField("quantity", IntegerType(), True),
+    StructField("subtotal", DoubleType(), True)
+]))
+
+cart_schema = StructType([
+    StructField("cart_id", StringType(), True),
     StructField("user_id", StringType(), True),
+    StructField("location", StringType(), True),
     StructField("timestamp", TimestampType(), True),
-    StructField("url", StringType(), True)
+    StructField("items", item_schema, True),
+    StructField("cart_total", DoubleType(), True),
+    StructField("chaos_type", StringType(), True),
+    StructField("discount_code", StringType(), True), # Chaos: Schema Evolution
+    StructField("app_version", StringType(), True)    # Chaos: Schema Evolution
 ])
 
-order_schema = StructType([
-    StructField("order_id", StringType(), True),
-    StructField("user_id", StringType(), True),
-    StructField("amount", DoubleType(), True), # MATCHES GENERATOR
-    StructField("timestamp", TimestampType(), True),
-    StructField("anomaly_flag", BooleanType(), True) # MATCHES GENERATOR
-])
+order_schema = cart_schema.add("order_id", StringType(), True) \
+                          .add("order_timestamp", TimestampType(), True) \
+                          .add("delivery_speed", StringType(), True) \
+                          .add("status", StringType(), True)
 
-inventory_schema = StructType([
-    StructField("update_id", StringType(), True),
-    StructField("sku", StringType(), True),
-    StructField("warehouse", StringType(), True),
-    StructField("quantity_change", DoubleType(), True),
-    StructField("timestamp", TimestampType(), True)
-])
-
-# 3. Read Real-Time Streams from Kafka
-def read_kafka_topic(topic_name, schema):
-    df = spark.readStream \
+# ==========================================
+# 4. INGESTION & DATA QUALITY (The Cleanup)
+# ==========================================
+def read_and_clean_kafka(topic_name, schema, time_col, unique_id):
+    # 1. Read Raw Kafka Stream
+    raw_df = spark.readStream \
         .format("kafka") \
-        .option("kafka.bootstrap.servers", "kafka-service:9092") \
+        .option("kafka.bootstrap.servers", KAFKA_BROKER) \
         .option("subscribe", topic_name) \
         .option("startingOffsets", "latest") \
         .load()
     
-    return df.select(from_json(col("value").cast("string"), schema).alias("data")) \
-             .select("data.*") \
-             .withColumn("timestamp", expr("to_timestamp(timestamp)"))
-
-# Listen to the exact topics from your ConfigMap
-clicks_df = read_kafka_topic("ecommerce_clickstream", click_schema)
-orders_df = read_kafka_topic("ecommerce_orders", order_schema)
-inventory_df = read_kafka_topic("ecommerce_inventory", inventory_schema)
-
-orders_df = orders_df.withColumn(
-    "is_anomaly_injected",
-    when(col("amount") > 1000, True).otherwise(False)
-)
-
-# 4. Apply Watermarking (Handles late-arriving data)
-clicks_watermarked = clicks_df.withWatermark("timestamp", "5 minutes")
-orders_watermarked = orders_df.withWatermark("timestamp", "5 minutes")
-inventory_watermarked = inventory_df.withWatermark("timestamp", "5 minutes")
-# 5. Complex Windowed Join
-joined_df = clicks_watermarked.alias("c").join(
-    orders_watermarked.alias("o"),
-    expr("""
-        c.user_id = o.user_id AND
-        o.timestamp >= c.timestamp AND
-        o.timestamp <= c.timestamp + interval 1 hour
-    """)
-).select(
-    col("c.user_id").alias("user_id"),
-    col("c.timestamp").alias("event_time"), 
-    col("c.url").alias("page_url"),          
-    col("o.order_id"),
-    col("o.amount").alias("price"), 
-    col("o.is_anomaly_injected"),   
-    col("o.timestamp").alias("order_time")
-)
-
-# 6. Write to Hot Storage (AWS RDS / PostgreSQL)
-def write_to_rds(df, epoch_id):
-    df.write \
-        .format("jdbc") \
-        .option("url", DB_URL) \
-        .option("dbtable", "live_conversions") \
-        .option("user", DB_USER) \
-        .option("password", DB_PASS) \
-        .option("driver", "org.postgresql.Driver") \
-        .mode("append") \
-        .save()
+    # 2. Parse JSON
+    parsed_df = raw_df.select(from_json(col("value").cast("string"), schema).alias("data")).select("data.*")
     
-def write_orders(df, epoch_id):
-    df.write \
-        .format("jdbc") \
-        .option("url", DB_URL) \
-        .option("dbtable", "orders") \
-        .option("user", DB_USER) \
-        .option("password", DB_PASS) \
-        .option("driver", "org.postgresql.Driver") \
-        .mode("append") \
-        .save()
-
-def write_clicks(df, epoch_id):
-    df.write \
-        .format("jdbc") \
-        .option("url", DB_URL) \
-        .option("dbtable", "clicks") \
-        .option("user", DB_USER) \
-        .option("password", DB_PASS) \
-        .option("driver", "org.postgresql.Driver") \
-        .mode("append") \
-        .save()
+    # 3. DATA QUALITY: Drop corrupted negative prices
+    validated_df = parsed_df.filter(col("cart_total") >= 0)
     
-def write_inventory(df, epoch_id):
+    # 4. LATE-ARRIVING DATA: Apply Watermark
+    watermarked_df = validated_df.withWatermark(time_col, "15 minutes")
+    
+    # 5. EXACTLY-ONCE SEMANTICS: Drop exact duplicates sent by the Chaos Generator
+    deduplicated_df = watermarked_df.dropDuplicates([unique_id, time_col])
+    
+    return deduplicated_df
+
+clean_carts = read_and_clean_kafka("carts", cart_schema, "timestamp", "cart_id")
+clean_orders = read_and_clean_kafka("orders", order_schema, "order_timestamp", "order_id")
+
+# ==========================================
+# 5. STREAMING AGGREGATIONS (Windowing)
+# ==========================================
+# Calculate Total Revenue per minute, per physical location
+revenue_by_location = clean_orders \
+    .groupBy(window(col("order_timestamp"), "1 minute"), col("location")) \
+    .agg(
+        sum("cart_total").alias("total_revenue"),
+        count("order_id").alias("total_orders")
+    ) \
+    .select(
+        col("window.start").alias("window_start"),
+        col("location"),
+        col("total_revenue"),
+        col("total_orders")
+    )
+
+# ==========================================
+# 5B. STREAMING AGGREGATIONS (Category Revenue)
+# ==========================================
+# First, we 'explode' the items array. If a cart has 3 items, this turns it into 3 separate rows!
+exploded_orders = clean_orders.withColumn("item", explode(col("items")))
+
+# Now we calculate Total Revenue per minute, per Category
+revenue_by_category = exploded_orders \
+    .groupBy(window(col("order_timestamp"), "1 minute"), col("item.category").alias("category")) \
+    .agg(
+        sum("item.subtotal").alias("category_revenue"),
+        sum("item.quantity").alias("items_sold")
+    ) \
+    .select(
+        col("window.start").alias("window_start"),
+        col("category"),
+        col("category_revenue"),
+        col("items_sold")
+    )
+
+# ==========================================
+# 6. HOT STORAGE (PostgreSQL)
+# ==========================================
+def write_to_postgres(df, epoch_id, table_name):
+    # Flatten the complex array into a JSON string so PostgreSQL can store it easily
+    if "items" in df.columns:
+        df = df.withColumn("items", to_json(col("items")))
+        
     df.write \
         .format("jdbc") \
         .option("url", DB_URL) \
-        .option("dbtable", "inventory") \
+        .option("dbtable", table_name) \
         .option("user", DB_USER) \
         .option("password", DB_PASS) \
         .option("driver", "org.postgresql.Driver") \
         .mode("append") \
         .save()
-    
-rds_query = joined_df.writeStream \
-    .foreachBatch(write_to_rds) \
-    .option("checkpointLocation", f"s3a://{S3_BUCKET}/checkpoints/rds_conversions/") \
-    .outputMode("append") \
+
+# Start Postgres Streams
+orders_pg_query = clean_orders.writeStream \
+    .foreachBatch(lambda df, epoch_id: write_to_postgres(df, epoch_id, "live_orders")) \
+    .option("checkpointLocation", f"s3a://{S3_BUCKET}/checkpoints/pg_orders/") \
     .start()
 
-orders_query = orders_df.writeStream \
-    .foreachBatch(write_orders) \
-    .option("checkpointLocation", f"s3a://{S3_BUCKET}/checkpoints/orders/") \
+revenue_pg_query = revenue_by_location.writeStream \
+    .foreachBatch(lambda df, epoch_id: write_to_postgres(df, epoch_id, "revenue_minute_windows")) \
+    .option("checkpointLocation", f"s3a://{S3_BUCKET}/checkpoints/pg_revenue/") \
+    .outputMode("update") \
     .start()
 
-clicks_query = clicks_df.writeStream \
-    .foreachBatch(write_clicks) \
-    .option("checkpointLocation", f"s3a://{S3_BUCKET}/checkpoints/clicks/") \
+# Start Postgres Stream for Category Revenue
+category_pg_query = revenue_by_category.writeStream \
+    .foreachBatch(lambda df, epoch_id: write_to_postgres(df, epoch_id, "revenue_category_windows")) \
+    .option("checkpointLocation", f"s3a://{S3_BUCKET}/checkpoints/pg_category/") \
+    .outputMode("update") \
     .start()
-
-inventory_query = inventory_df.writeStream \
-    .foreachBatch(write_inventory) \
-    .option("checkpointLocation", f"s3a://{S3_BUCKET}/checkpoints/inventory/") \
-    .start()
-
-# Write to Cold Storage (AWS S3 Data Lake)
-s3_query = joined_df.writeStream \
+# ==========================================
+# 7. COLD STORAGE & SCHEMA EVOLUTION (AWS S3)
+# ==========================================
+# We save raw, unflattened data to S3 using Parquet. 
+# mergeSchema=true ensures new columns (like discount_code) are added automatically!
+s3_datalake_query = clean_orders.writeStream \
     .format("parquet") \
-    .option("path", f"s3a://{S3_BUCKET}/processed-data/") \
-    .option("checkpointLocation", f"s3a://{S3_BUCKET}/checkpoints/conversions/") \
+    .option("path", f"s3a://{S3_BUCKET}/datalake/orders/") \
+    .option("checkpointLocation", f"s3a://{S3_BUCKET}/checkpoints/s3_orders/") \
+    .option("mergeSchema", "true") \
     .outputMode("append") \
     .start()
 
-# Keep application running
 spark.streams.awaitAnyTermination()

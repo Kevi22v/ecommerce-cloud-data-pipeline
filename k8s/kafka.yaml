@@ -61,8 +61,9 @@ spec:
           value: kafka-service
         - name: KAFKA_ZOOKEEPER_CONNECT
           value: zookeeper-service:2181
+        # 👇 THE CRITICAL FIX: New topic names, and 15 partitions each!
         - name: KAFKA_CREATE_TOPICS
-          value: "ecommerce_orders:1:1,ecommerce_clickstream:1:1,ecommerce_inventory:1:1"
+          value: "carts:15:1,orders:15:1,deliveries:15:1"
 
 ---
 apiVersion: v1
