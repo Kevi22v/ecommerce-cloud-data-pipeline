@@ -16,7 +16,8 @@ spark = SparkSession.builder \
     .config("spark.metrics.conf.*.sink.prometheusServlet.class", "org.apache.spark.metrics.sink.PrometheusServlet") \
     .getOrCreate()
 
-spark.sparkContext.setLogLevel("WARN")
+# Change this from "WARN" to "INFO"
+spark.sparkContext.setLogLevel("INFO")
 
 # ==========================================
 # 2. CREDENTIALS & CONFIG
