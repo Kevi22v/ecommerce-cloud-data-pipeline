@@ -25,7 +25,7 @@ spec:
         imagePullPolicy: Always
         ports:
         - containerPort: 5000
-        command: ["python", "src/generator/cart_gen.py"]
+        command: ["python", "cart_gen.py"]
         envFrom:
         - configMapRef:
             name: ecommerce-config
@@ -66,7 +66,7 @@ spec:
         imagePullPolicy: Always
         ports:
         - containerPort: 5000
-        command: ["python", "src/generator/order_gen.py"]
+        command: ["python", "order_gen.py"]
         envFrom:
         - configMapRef:
             name: ecommerce-config
@@ -106,7 +106,7 @@ spec:
         imagePullPolicy: Always
         ports:
         - containerPort: 5000
-        command: ["python", "src/generator/delivery_gen.py"]
+        command: ["python", "delivery_gen.py"]
         envFrom:
         - configMapRef:
             name: ecommerce-config
