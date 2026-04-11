@@ -94,7 +94,7 @@ def generate_cart():
 
 def delivery_report(err, msg):
     if err is not None:
-        pass # Silently fail for the demo to keep the terminal clean
+        print(f"🚨 KAFKA ERROR: {err}")
 
 if __name__ == "__main__":
     print("Started Cart Spammer (🔥 CHAOS MODE ENABLED).")
