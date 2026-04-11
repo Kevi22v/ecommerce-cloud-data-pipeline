@@ -1,19 +1,19 @@
 # ==========================================
-# 1. THE ORDER GENERATOR (Financials)
+# 1. THE CART GENERATOR (The Spammer)
 # ==========================================
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: order-generator
+  name: cart-generator
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: order-generator
+      app: cart-generator
   template:
     metadata:
       labels:
-        app: order-generator
+        app: cart-generator
       annotations:                     
         prometheus.io/scrape: "true"   
         prometheus.io/port: "5000"   
@@ -25,35 +25,36 @@ spec:
         imagePullPolicy: Always
         ports:
         - containerPort: 5000
-        command: ["python", "order_gen.py"]
+        command: ["python", "src/generator/cart_gen.py"]
         envFrom:
         - configMapRef:
             name: ecommerce-config
-        env:
-        - name: KAFKA_ORDER_TOPIC
-          value: "ecommerce_orders"
-        - name: SLEEP_MIN
-          value: "0.5"
-        - name: SLEEP_MAX
-          value: "2.0"
+        # Note: SLEEP_MIN/MAX are now handled by the TURBO mode logic inside the Python script
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:            
+            cpu: "250m"      
+            memory: "250Mi"  
 
 ---
 # ==========================================
-# 2. THE CLICKSTREAM GENERATOR (Web Traffic)
+# 2. THE ORDER CONVERTER (The Math Engine)
 # ==========================================
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: clickstream-generator
+  name: order-generator
 spec:
-  replicas: 1
+  replicas: 1 
   selector:
     matchLabels:
-      app: clickstream-generator
+      app: order-generator
   template:
     metadata:
       labels:
-        app: clickstream-generator
+        app: order-generator
       annotations:                     
         prometheus.io/scrape: "true"   
         prometheus.io/port: "5000" 
@@ -65,35 +66,35 @@ spec:
         imagePullPolicy: Always
         ports:
         - containerPort: 5000
-        command: ["python", "clickstream_gen.py"]
+        command: ["python", "src/generator/order_gen.py"]
         envFrom:
         - configMapRef:
             name: ecommerce-config
-        env:
-        - name: KAFKA_CLICKSTREAM_TOPIC
-          value: "ecommerce_clickstream"
-        - name: SLEEP_MIN
-          value: "0.1"
-        - name: SLEEP_MAX
-          value: "0.5"
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:            
+            cpu: "250m"      
+            memory: "250Mi"  
 
 ---
 # ==========================================
-# 3. THE INVENTORY GENERATOR (Warehouse)
+# 3. THE DELIVERY FULFILLER (Logistics)
 # ==========================================
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: inventory-generator
+  name: delivery-generator
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: inventory-generator
+      app: delivery-generator
   template:
     metadata:
       labels:
-        app: inventory-generator
+        app: delivery-generator
       annotations:                     
         prometheus.io/scrape: "true"   
         prometheus.io/port: "5000"     
@@ -105,21 +106,21 @@ spec:
         imagePullPolicy: Always
         ports:
         - containerPort: 5000
-        command: ["python", "inventory_gen.py"]
+        command: ["python", "src/generator/delivery_gen.py"]
         envFrom:
         - configMapRef:
             name: ecommerce-config
-        env:
-        - name: KAFKA_INVENTORY_TOPIC
-          value: "ecommerce_inventory"
-        - name: SLEEP_MIN
-          value: "0.5"
-        - name: SLEEP_MAX
-          value: "1.5"
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "250m"
+            memory: "250Mi"
 
 ---
 # ==========================================
-# 4. THE DATA PROCESSOR (The Brain)
+# 4. THE DATA PROCESSOR (PySpark)
 # ==========================================
 apiVersion: apps/v1
 kind: Deployment
@@ -164,3 +165,10 @@ spec:
               secretKeyRef:
                 name: ecommerce-secrets
                 key: AWS_SECRET_KEY
+        resources:
+          requests:
+            cpu: "150m"
+            memory: "256Mi"
+          limits:
+            cpu: "400m"      
+            memory: "400Mi"
