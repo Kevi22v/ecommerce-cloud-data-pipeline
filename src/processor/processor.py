@@ -128,18 +128,18 @@ delivery_schema = order_schema.add("delivery_timestamp", TimestampType(), True)
 # ==========================================
 # 4. INGESTION & DATA QUALITY (The Cleanup)
 # ==========================================
-def read_and_clean_kafka(topic_name, schema, time_col, unique_id, watermark_duration): # <-- Added parameter
+def read_and_clean_kafka(topic_name, schema, time_col, unique_id, watermark_duration): 
     raw_df = spark.readStream \
         .format("kafka") \
         .option("kafka.bootstrap.servers", KAFKA_BROKER) \
         .option("subscribe", topic_name) \
         .option("startingOffsets", "latest") \
+        .option("maxOffsetsPerTrigger", 10000) \
         .load()
     
     parsed_df = raw_df.select(from_json(col("value").cast("string"), schema).alias("data")).select("data.*")
     validated_df = parsed_df.filter(col("cart_total") >= 0)
     
-    # Use the dynamic parameter here
     watermarked_df = validated_df.withWatermark(time_col, watermark_duration)
     deduplicated_df = watermarked_df.dropDuplicates([unique_id, time_col])
     
