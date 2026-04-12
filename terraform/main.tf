@@ -203,7 +203,7 @@ resource "aws_eks_node_group" "node_group" {
   node_group_name = "ecommerce-node-group"
   node_role_arn   = aws_iam_role.eks_nodes.arn
   subnet_ids      = [aws_subnet.public_1.id, aws_subnet.public_2.id]
-  instance_types  = ["t3.medium"] 
+  instance_types  = ["t3.large"] 
 
   scaling_config {
     desired_size = 2
