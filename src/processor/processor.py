@@ -19,6 +19,7 @@ spark = SparkSession.builder \
     .config("spark.ui.prometheus.enabled", "true") \
     .config("spark.metrics.conf.*.sink.prometheusServlet.class", "org.apache.spark.metrics.sink.PrometheusServlet") \
     .config("spark.sql.shuffle.partitions", "4") \
+    .config("spark.sql.streaming.statefulOperator.checkCorrectness.enabled", "false") \
     .getOrCreate()
 
 # Change this from "WARN" to "INFO"
