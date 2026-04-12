@@ -56,19 +56,19 @@ def initialize_database():
             CREATE TABLE IF NOT EXISTS live_orders (
                 cart_id TEXT, user_id TEXT, location TEXT, timestamp TIMESTAMP,
                 items TEXT, cart_total DOUBLE PRECISION, chaos_type TEXT,
-                discount_code TEXT, app_version TEXT, order_id TEXT PRIMARY KEY,
+                discount_code TEXT, app_version TEXT, order_id TEXT,
                 order_timestamp TIMESTAMP, delivery_speed TEXT, status TEXT
             );
             
             CREATE TABLE IF NOT EXISTS raw_deliveries (
-                order_id TEXT PRIMARY KEY,
+                order_id TEXT,
                 delivery_timestamp TIMESTAMP,
                 delivery_speed TEXT,
                 status TEXT
             );
             
             CREATE TABLE IF NOT EXISTS raw_carts (
-                cart_id TEXT PRIMARY KEY,
+                cart_id TEXT,
                 user_id TEXT,
                 timestamp TIMESTAMP,
                 items TEXT
@@ -85,7 +85,7 @@ def initialize_database():
             );
             
             -- ELT View 1: Abandoned Carts
-            DROP TABLE IF EXISTS abandoned_carts CASCADE; -- Just in case an old table exists!
+            DROP TABLE IF EXISTS abandoned_carts CASCADE;
             CREATE OR REPLACE VIEW abandoned_carts AS
             SELECT 
                 c.cart_id, 
@@ -107,7 +107,8 @@ def initialize_database():
             JOIN raw_deliveries d ON o.order_id = d.order_id
             GROUP BY date_trunc('hour', d.delivery_timestamp), o.delivery_speed;
             
-            -- Indexes for speed
+            -- Indexes for speed (Replacing the Primary Keys!)
+            CREATE INDEX IF NOT EXISTS idx_order_id ON live_orders(order_id);
             CREATE INDEX IF NOT EXISTS idx_order_time ON live_orders(order_timestamp);
             CREATE INDEX IF NOT EXISTS idx_rev_time ON revenue_minute_windows(window_start);
             CREATE INDEX IF NOT EXISTS idx_del_order ON raw_deliveries(order_id);
