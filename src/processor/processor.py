@@ -60,12 +60,18 @@ def initialize_database():
                 order_timestamp TIMESTAMP, delivery_speed TEXT, status TEXT
             );
             
-            -- NEW: Table for raw deliveries
             CREATE TABLE IF NOT EXISTS raw_deliveries (
                 order_id TEXT PRIMARY KEY,
                 delivery_timestamp TIMESTAMP,
                 delivery_speed TEXT,
                 status TEXT
+            );
+            
+            CREATE TABLE IF NOT EXISTS raw_carts (
+                cart_id TEXT PRIMARY KEY,
+                user_id TEXT,
+                timestamp TIMESTAMP,
+                items TEXT
             );
             
             CREATE TABLE IF NOT EXISTS revenue_minute_windows (
@@ -78,17 +84,19 @@ def initialize_database():
                 category_revenue DOUBLE PRECISION, items_sold BIGINT
             );
             
-            CREATE TABLE IF NOT EXISTS abandoned_carts (
-                cart_id TEXT, user_id TEXT, 
-                cart_time TIMESTAMP, cart_items TEXT
-            );
+            -- ELT View 1: Abandoned Carts
+            DROP TABLE IF EXISTS abandoned_carts CASCADE; -- Just in case an old table exists!
+            CREATE OR REPLACE VIEW abandoned_carts AS
+            SELECT 
+                c.cart_id, 
+                c.user_id, 
+                c.timestamp AS cart_time, 
+                c.items AS cart_items
+            FROM raw_carts c
+            LEFT JOIN live_orders o ON c.cart_id = o.cart_id
+            WHERE o.order_id IS NULL;
             
-            -- Add indexes to make dashboard queries lightning fast
-            CREATE INDEX IF NOT EXISTS idx_order_time ON live_orders(order_timestamp);
-            CREATE INDEX IF NOT EXISTS idx_rev_time ON revenue_minute_windows(window_start);
-            CREATE INDEX IF NOT EXISTS idx_del_order ON raw_deliveries(order_id);
-
-            -- NEW: The ELT Analytics View (Postgres does the math instantly!)
+            -- ELT View 2: Delivery Performance
             CREATE OR REPLACE VIEW live_delivery_performance AS
             SELECT 
                 date_trunc('hour', d.delivery_timestamp) AS window_start,
@@ -98,6 +106,12 @@ def initialize_database():
             FROM live_orders o
             JOIN raw_deliveries d ON o.order_id = d.order_id
             GROUP BY date_trunc('hour', d.delivery_timestamp), o.delivery_speed;
+            
+            -- Indexes for speed
+            CREATE INDEX IF NOT EXISTS idx_order_time ON live_orders(order_timestamp);
+            CREATE INDEX IF NOT EXISTS idx_rev_time ON revenue_minute_windows(window_start);
+            CREATE INDEX IF NOT EXISTS idx_del_order ON raw_deliveries(order_id);
+            CREATE INDEX IF NOT EXISTS idx_cart_match ON raw_carts(cart_id);
         """)
         
         conn.commit()
@@ -200,32 +214,6 @@ revenue_by_category = exploded_orders \
         col("category_revenue"),
         col("items_sold")
     )
-
-
-# ==========================================
-# 5_NEW. STREAM-TO-STREAM JOIN (Cart Abandonment)
-# ==========================================
-carts_aliased = clean_carts.selectExpr(
-    "cart_id", "user_id", "items as cart_items", "timestamp as cart_time"
-)
-
-# We just need the cart_id and order_timestamp from the orders stream to make the match
-orders_for_carts = clean_orders.selectExpr(
-    "cart_id as matched_cart_id", "order_id", "order_timestamp"
-)
-
-# Left Outer Join: Keep the cart, look for an order within 1 hour
-abandoned_carts_stream = carts_aliased.join(
-    orders_for_carts,
-    expr("""
-        cart_id = matched_cart_id AND
-        order_timestamp >= cart_time AND
-        order_timestamp <= cart_time + interval 5 minutes
-    """),
-    "leftOuter"
-).filter(col("order_id").isNull()) \
- .select("cart_id", "user_id", "cart_time", "cart_items")
-
 # ==========================================
 # 6. HOT STORAGE (PostgreSQL)
 # ==========================================
@@ -242,7 +230,8 @@ def write_to_postgres(df, epoch_id, table_name):
                        "delivery_speed", "status")
     elif table_name == "raw_deliveries":
         df = df.select("order_id", "delivery_timestamp", "delivery_speed", "status")
-        
+    elif table_name == "raw_carts":
+        df = df.select("cart_id", "user_id", "timestamp", "items")
     df.write \
         .format("jdbc") \
         .option("url", DB_URL) \
@@ -281,10 +270,10 @@ delivery_pg_query = clean_deliveries.writeStream \
     .outputMode("append") \
     .start()
 
-abandoned_pg_query = abandoned_carts_stream.writeStream \
-    .trigger(processingTime="10 seconds") \
-    .foreachBatch(lambda df, epoch_id: write_to_postgres(df, epoch_id, "abandoned_carts")) \
-    .option("checkpointLocation", f"s3a://{S3_BUCKET}/checkpoints/pg_abandoned_carts/") \
+cart_pg_query = clean_carts.writeStream \
+    .trigger(processingTime="2 minutes") \
+    .foreachBatch(lambda df, epoch_id: write_to_postgres(df, epoch_id, "raw_carts")) \
+    .option("checkpointLocation", f"s3a://{S3_BUCKET}/checkpoints/pg_raw_carts/") \
     .outputMode("append") \
     .start()
 
