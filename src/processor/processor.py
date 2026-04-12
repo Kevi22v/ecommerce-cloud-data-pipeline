@@ -1,4 +1,5 @@
 import os
+import psycopg2
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, from_json, expr, window, sum, count, to_json, explode
 from pyspark.sql.types import StructType, StructField, StringType, DoubleType, TimestampType, IntegerType, ArrayType
@@ -32,6 +33,67 @@ DB_USER = os.environ.get("DB_USER", "dbadmin")
 DB_PASS = os.environ.get("DB_PASSWORD", "fallback_pass")
 S3_BUCKET = os.environ.get("S3_BUCKET", "fallback-bucket-name")
 KAFKA_BROKER = os.environ.get("KAFKA_BROKER", "kafka-service:9092")
+
+
+# ==========================================
+# 2B. DATABASE INITIALIZATION (Self-Healing)
+# ==========================================
+def initialize_database():
+    print("⏳ Checking/Creating PostgreSQL Tables...")
+    try:
+        # Connect to the database
+        conn = psycopg2.connect(
+            host=DB_HOST, 
+            database="ecommerce_db", 
+            user=DB_USER, 
+            password=DB_PASS
+        )
+        cur = conn.cursor()
+        
+        # Create tables if they don't exist
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS live_orders (
+                cart_id TEXT, user_id TEXT, location TEXT, timestamp TIMESTAMP,
+                items TEXT, cart_total DOUBLE PRECISION, chaos_type TEXT,
+                discount_code TEXT, app_version TEXT, order_id TEXT PRIMARY KEY,
+                order_timestamp TIMESTAMP, delivery_speed TEXT, status TEXT
+            );
+            
+            CREATE TABLE IF NOT EXISTS revenue_minute_windows (
+                window_start TIMESTAMP, location TEXT, 
+                total_revenue DOUBLE PRECISION, total_orders BIGINT
+            );
+            
+            CREATE TABLE IF NOT EXISTS revenue_category_windows (
+                window_start TIMESTAMP, category TEXT, 
+                category_revenue DOUBLE PRECISION, items_sold BIGINT
+            );
+            
+            CREATE TABLE IF NOT EXISTS delivery_performance_hourly (
+                window_start TIMESTAMP, delivery_speed TEXT, 
+                avg_delivery_minutes DOUBLE PRECISION, completed_deliveries BIGINT
+            );
+            
+            CREATE TABLE IF NOT EXISTS abandoned_carts (
+                cart_id TEXT, user_id TEXT, 
+                cart_time TIMESTAMP, cart_items TEXT
+            );
+            
+            -- Add indexes to make dashboard queries lightning fast
+            CREATE INDEX IF NOT EXISTS idx_order_time ON live_orders(order_timestamp);
+            CREATE INDEX IF NOT EXISTS idx_rev_time ON revenue_minute_windows(window_start);
+        """)
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        print("✅ Database tables ready!")
+        
+    except Exception as e:
+        print(f"⚠️ Database initialization failed: {e}")
+
+# Run it before Spark does anything!
+initialize_database()
 
 # ==========================================
 # 3. SCHEMA DEFINITIONS (With Schema Evolution buffers)
@@ -232,7 +294,7 @@ delivery_pg_query = delivery_performance.writeStream \
     .trigger(processingTime="10 seconds") \
     .foreachBatch(lambda df, epoch_id: write_to_postgres(df, epoch_id, "delivery_performance_hourly")) \
     .option("checkpointLocation", f"s3a://{S3_BUCKET}/checkpoints/pg_delivery_perf/") \
-    .outputMode("update") \
+    .outputMode("append") \
     .start()
 
 abandoned_pg_query = abandoned_carts_stream.writeStream \
