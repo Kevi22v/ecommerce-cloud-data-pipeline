@@ -260,6 +260,13 @@ def write_to_postgres(df, epoch_id, table_name):
     if "items" in df.columns:
         df = df.withColumn("items", to_json(col("items")))
         
+    # FORCE the dataframe to match the PostgreSQL table EXACTLY before writing
+    if table_name == "live_orders":
+        df = df.select("cart_id", "user_id", "location", "timestamp", 
+                       "items", "cart_total", "chaos_type", "discount_code", 
+                       "app_version", "order_id", "order_timestamp", 
+                       "delivery_speed", "status")
+        
     df.write \
         .format("jdbc") \
         .option("url", DB_URL) \
