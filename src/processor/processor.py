@@ -149,7 +149,7 @@ def read_and_clean_kafka(topic_name, schema, time_col, unique_id, watermark_dura
         .option("kafka.bootstrap.servers", KAFKA_BROKER) \
         .option("subscribe", topic_name) \
         .option("startingOffsets", "latest") \
-        .option("maxOffsetsPerTrigger", 10000) \
+        .option("maxOffsetsPerTrigger", 1000) \
         .load()
     
     parsed_df = raw_df.select(from_json(col("value").cast("string"), schema).alias("data")).select("data.*")
@@ -161,8 +161,8 @@ def read_and_clean_kafka(topic_name, schema, time_col, unique_id, watermark_dura
     return deduplicated_df
 
 # Update the calls to pass the specific durations:
-clean_carts = read_and_clean_kafka("carts", cart_schema, "timestamp", "cart_id", "1 hour")
-clean_orders = read_and_clean_kafka("orders", order_schema, "order_timestamp", "order_id", "1 hour")
+clean_carts = read_and_clean_kafka("carts", cart_schema, "timestamp", "cart_id", "5 minutes")
+clean_orders = read_and_clean_kafka("orders", order_schema, "order_timestamp", "order_id", "5 minutes")
 clean_deliveries = read_and_clean_kafka("deliveries", delivery_schema, "delivery_timestamp", "order_id", "5 minutes")
 # ==========================================
 # 5. STREAMING AGGREGATIONS (Windowing)
@@ -220,7 +220,7 @@ abandoned_carts_stream = carts_aliased.join(
     expr("""
         cart_id = matched_cart_id AND
         order_timestamp >= cart_time AND
-        order_timestamp <= cart_time + interval 1 hour
+        order_timestamp <= cart_time + interval 5 minutes
     """),
     "leftOuter"
 ).filter(col("order_id").isNull()) \
