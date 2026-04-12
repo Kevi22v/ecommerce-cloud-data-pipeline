@@ -1,12 +1,36 @@
 # src/generator/order_gen.py
-from datetime import datetime
 import json
 import random
+import logging
+from logging.handlers import RotatingFileHandler
+from datetime import datetime
 from confluent_kafka import Consumer, Producer, KafkaError, KafkaException
 
-from kafka_config import KAFKA_BROKER, TOPIC_CARTS, TOPIC_ORDERS
+# --- 1. SETUP ROTATING FILE LOGGING ---
+# Max 10 MB per file, keep 4 backups (5 files total = 50 MB max)
+log_handler = RotatingFileHandler(
+    'order_converter.log', 
+    maxBytes=10 * 1024 * 1024,  # 10 MB
+    backupCount=4               # Keep 4 older files
+)
+formatter = logging.Formatter('%(asctime)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+log_handler.setFormatter(formatter)
+
+logger = logging.getLogger('order_logger')
+logger.setLevel(logging.INFO)
+logger.addHandler(log_handler)
+
+# --- YOUR EXISTING IMPORTS & GLOBALS ---
+try:
+    from kafka_config import KAFKA_BROKER, TOPIC_CARTS, TOPIC_ORDERS
+except ImportError:
+    # Fallbacks for testing
+    KAFKA_BROKER = "localhost:9092"
+    TOPIC_CARTS = "carts"
+    TOPIC_ORDERS = "orders"
 
 print(f"Connecting Order Converter to Kafka at {KAFKA_BROKER}...")
+print("--> Logs are being written to 'order_converter.log' (Rotates at 10MB, max 50MB)\n")
 
 # 1. SET UP CONSUMER (Read Carts)
 consumer_conf = {
@@ -26,11 +50,14 @@ producer = Producer(producer_conf)
 
 def delivery_report(err, msg):
     if err is not None:
-        pass # Keep terminal clean
+        # Catch errors to the log file instead of passing quietly
+        logger.error(f"🚨 KAFKA ERROR: {err}")
 
 CONVERSION_RATE = 0.30  
 
 print("Connected! Listening for shopping carts (and passing along the chaos)...")
+
+events_processed = 0
 
 try:
     while True:
@@ -41,6 +68,7 @@ try:
             else: raise KafkaException(msg.error())
                 
         cart_data = json.loads(msg.value().decode('utf-8'))
+        events_processed += 1
         
         # Seed random with the cart_id. If a duplicate cart arrives, 
         # it will make the exact same buy/abandon decision!
@@ -70,11 +98,15 @@ try:
             producer.poll(0)
             
             chaos_flag = order_data.get("chaos_type", "CLEAN")
-            print(f"SALE! Order {order_data['order_id'][:12]} generated. [Status: {chaos_flag}]")
+            logger.info(f"SALE! Order {order_data['order_id'][:12]} generated. [Status: {chaos_flag}]")
         
         else:
             chaos_flag = cart_data.get("chaos_type", "CLEAN")
-            print(f"Abandoned: Cart {cart_data['cart_id'][:8]} left behind. [Status: {chaos_flag}]")
+            logger.info(f"Abandoned: Cart {cart_data['cart_id'][:8]} left behind. [Status: {chaos_flag}]")
+
+        # Terminal update exactly once every 1,000 processed events
+        if events_processed % 1000 == 0:
+            print(f"⚡ Status: Successfully processed {events_processed} carts from Kafka...")
 
 except KeyboardInterrupt:
     print("\nStopping Order Converter...")

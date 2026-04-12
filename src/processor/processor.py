@@ -61,11 +61,11 @@ order_schema = cart_schema.add("order_id", StringType(), True) \
                           .add("delivery_speed", StringType(), True) \
                           .add("status", StringType(), True)
 
+delivery_schema = order_schema.add("delivery_timestamp", TimestampType(), True)
 # ==========================================
 # 4. INGESTION & DATA QUALITY (The Cleanup)
 # ==========================================
-def read_and_clean_kafka(topic_name, schema, time_col, unique_id):
-    # 1. Read Raw Kafka Stream
+def read_and_clean_kafka(topic_name, schema, time_col, unique_id, watermark_duration): # <-- Added parameter
     raw_df = spark.readStream \
         .format("kafka") \
         .option("kafka.bootstrap.servers", KAFKA_BROKER) \
@@ -73,23 +73,19 @@ def read_and_clean_kafka(topic_name, schema, time_col, unique_id):
         .option("startingOffsets", "latest") \
         .load()
     
-    # 2. Parse JSON
     parsed_df = raw_df.select(from_json(col("value").cast("string"), schema).alias("data")).select("data.*")
-    
-    # 3. DATA QUALITY: Drop corrupted negative prices
     validated_df = parsed_df.filter(col("cart_total") >= 0)
     
-    # 4. LATE-ARRIVING DATA: Apply Watermark
-    watermarked_df = validated_df.withWatermark(time_col, "15 minutes")
-    
-    # 5. EXACTLY-ONCE SEMANTICS: Drop exact duplicates sent by the Chaos Generator
+    # Use the dynamic parameter here
+    watermarked_df = validated_df.withWatermark(time_col, watermark_duration)
     deduplicated_df = watermarked_df.dropDuplicates([unique_id, time_col])
     
     return deduplicated_df
 
-clean_carts = read_and_clean_kafka("carts", cart_schema, "timestamp", "cart_id")
-clean_orders = read_and_clean_kafka("orders", order_schema, "order_timestamp", "order_id")
-
+# Update the calls to pass the specific durations:
+clean_carts = read_and_clean_kafka("carts", cart_schema, "timestamp", "cart_id", "1 hour")
+clean_orders = read_and_clean_kafka("orders", order_schema, "order_timestamp", "order_id", "7 days")
+clean_deliveries = read_and_clean_kafka("deliveries", delivery_schema, "delivery_timestamp", "order_id", "7 days")
 # ==========================================
 # 5. STREAMING AGGREGATIONS (Windowing)
 # ==========================================
@@ -127,6 +123,72 @@ revenue_by_category = exploded_orders \
         col("items_sold")
     )
 
+
+# ==========================================
+# 5_NEW. STREAM-TO-STREAM JOIN (Cart Abandonment)
+# ==========================================
+carts_aliased = clean_carts.selectExpr(
+    "cart_id", "user_id", "items as cart_items", "timestamp as cart_time"
+)
+
+# We just need the cart_id and order_timestamp from the orders stream to make the match
+orders_for_carts = clean_orders.selectExpr(
+    "cart_id as matched_cart_id", "order_id", "order_timestamp"
+)
+
+# Left Outer Join: Keep the cart, look for an order within 1 hour
+abandoned_carts_stream = carts_aliased.join(
+    orders_for_carts,
+    expr("""
+        cart_id = matched_cart_id AND
+        order_timestamp >= cart_time AND
+        order_timestamp <= cart_time + interval 1 hour
+    """),
+    "leftOuter"
+).filter(col("order_id").isNull()) \
+ .select("cart_id", "user_id", "cart_time", "cart_items")
+
+# ==========================================
+# 5C. STREAM-TO-STREAM JOIN (Orders + Deliveries)
+# ==========================================
+# Alias the columns so they don't clash during the join
+orders_aliased = clean_orders.selectExpr(
+    "order_id", "order_timestamp", "delivery_speed", "location as order_location"
+).withWatermark("order_timestamp", "7 days")
+
+deliveries_aliased = clean_deliveries.selectExpr(
+    "order_id as del_order_id", "delivery_timestamp", "status as final_status"
+).withWatermark("delivery_timestamp", "7 days")
+
+# Join them together!
+# We tell Spark: "Match the IDs, and expect the delivery to happen between 0 and 7 days after the order."
+lifecycle_stream = orders_aliased.join(
+    deliveries_aliased,
+    expr("""
+        order_id = del_order_id AND
+        delivery_timestamp >= order_timestamp AND
+        delivery_timestamp <= order_timestamp + interval 7 days
+    """)
+)
+
+# ==========================================
+# 5D. LOGISTICS ANALYTICS (Delivery Performance)
+# ==========================================
+# Calculate the average delivery time per speed tier over a 1-hour tumbling window
+delivery_performance = lifecycle_stream \
+    .groupBy(window(col("delivery_timestamp"), "1 hour"), col("delivery_speed")) \
+    .agg(
+        # Cast timestamps to seconds (double), subtract them, divide by 60 for minutes
+        expr("avg(cast(delivery_timestamp as double) - cast(order_timestamp as double)) / 60").alias("avg_delivery_minutes"),
+        count("order_id").alias("completed_deliveries")
+    ) \
+    .select(
+        col("window.start").alias("window_start"),
+        col("delivery_speed"),
+        col("avg_delivery_minutes"),
+        col("completed_deliveries")
+    )
+
 # ==========================================
 # 6. HOT STORAGE (PostgreSQL)
 # ==========================================
@@ -145,24 +207,41 @@ def write_to_postgres(df, epoch_id, table_name):
         .mode("append") \
         .save()
 
-# Start Postgres Streams
+# Start Postgres Streams (Now with 10-second micro-batch triggers!)
 orders_pg_query = clean_orders.writeStream \
+    .trigger(processingTime="10 seconds") \
     .foreachBatch(lambda df, epoch_id: write_to_postgres(df, epoch_id, "live_orders")) \
     .option("checkpointLocation", f"s3a://{S3_BUCKET}/checkpoints/pg_orders/") \
     .start()
 
 revenue_pg_query = revenue_by_location.writeStream \
+    .trigger(processingTime="10 seconds") \
     .foreachBatch(lambda df, epoch_id: write_to_postgres(df, epoch_id, "revenue_minute_windows")) \
     .option("checkpointLocation", f"s3a://{S3_BUCKET}/checkpoints/pg_revenue/") \
     .outputMode("update") \
     .start()
 
-# Start Postgres Stream for Category Revenue
 category_pg_query = revenue_by_category.writeStream \
+    .trigger(processingTime="10 seconds") \
     .foreachBatch(lambda df, epoch_id: write_to_postgres(df, epoch_id, "revenue_category_windows")) \
     .option("checkpointLocation", f"s3a://{S3_BUCKET}/checkpoints/pg_category/") \
     .outputMode("update") \
     .start()
+
+delivery_pg_query = delivery_performance.writeStream \
+    .trigger(processingTime="10 seconds") \
+    .foreachBatch(lambda df, epoch_id: write_to_postgres(df, epoch_id, "delivery_performance_hourly")) \
+    .option("checkpointLocation", f"s3a://{S3_BUCKET}/checkpoints/pg_delivery_perf/") \
+    .outputMode("update") \
+    .start()
+
+abandoned_pg_query = abandoned_carts_stream.writeStream \
+    .trigger(processingTime="10 seconds") \
+    .foreachBatch(lambda df, epoch_id: write_to_postgres(df, epoch_id, "abandoned_carts")) \
+    .option("checkpointLocation", f"s3a://{S3_BUCKET}/checkpoints/pg_abandoned_carts/") \
+    .outputMode("append") \
+    .start()
+
 # ==========================================
 # 7. COLD STORAGE & SCHEMA EVOLUTION (AWS S3)
 # ==========================================
@@ -170,9 +249,20 @@ category_pg_query = revenue_by_category.writeStream \
 # mergeSchema=true ensures new columns (like discount_code) are added automatically!
 s3_datalake_query = clean_orders.writeStream \
     .format("parquet") \
+    .trigger(processingTime="2 minutes") \
     .option("path", f"s3a://{S3_BUCKET}/datalake/orders/") \
     .option("checkpointLocation", f"s3a://{S3_BUCKET}/checkpoints/s3_orders/") \
     .option("mergeSchema", "true") \
+    .outputMode("append") \
+    .start()
+
+# Save the joined, end-to-end transaction lifecycle to S3 Datalake
+s3_lifecycle_query = lifecycle_stream.writeStream \
+    .format("parquet") \
+    .trigger(processingTime="2 minutes") \
+    .option("mergeSchema", "true") \
+    .option("path", f"s3a://{S3_BUCKET}/datalake/lifecycle/") \
+    .option("checkpointLocation", f"s3a://{S3_BUCKET}/checkpoints/s3_lifecycle/") \
     .outputMode("append") \
     .start()
 

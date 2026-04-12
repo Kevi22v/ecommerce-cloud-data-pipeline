@@ -1,12 +1,36 @@
 # src/generator/delivery_gen.py
 import json
 import random
+import logging
+from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
 from confluent_kafka import Consumer, Producer, KafkaError, KafkaException
 
-from kafka_config import KAFKA_BROKER, TOPIC_ORDERS, TOPIC_DELIVERIES
+# --- 1. SETUP ROTATING FILE LOGGING ---
+# Max 10 MB per file, keep 4 backups (5 files total = 50 MB max)
+log_handler = RotatingFileHandler(
+    'delivery_fulfiller.log', 
+    maxBytes=10 * 1024 * 1024,  # 10 MB
+    backupCount=4               # Keep 4 older files
+)
+formatter = logging.Formatter('%(asctime)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+log_handler.setFormatter(formatter)
+
+logger = logging.getLogger('delivery_logger')
+logger.setLevel(logging.INFO)
+logger.addHandler(log_handler)
+
+# --- YOUR EXISTING IMPORTS & GLOBALS ---
+try:
+    from kafka_config import KAFKA_BROKER, TOPIC_ORDERS, TOPIC_DELIVERIES
+except ImportError:
+    # Fallbacks for testing
+    KAFKA_BROKER = "localhost:9092"
+    TOPIC_ORDERS = "orders"
+    TOPIC_DELIVERIES = "deliveries"
 
 print(f"Connecting Delivery Fulfiller to Kafka at {KAFKA_BROKER}...")
+print("--> Logs are being written to 'delivery_fulfiller.log' (Rotates at 10MB, max 50MB)\n")
 
 # 1. SET UP CONSUMER (Read Orders)
 consumer_conf = {
@@ -26,9 +50,12 @@ producer = Producer(producer_conf)
 
 def delivery_report(err, msg):
     if err is not None:
-        pass 
+        # Catch errors to the log file instead of passing quietly
+        logger.error(f"🚨 KAFKA ERROR: {err}")
 
 print("Connected! Waiting for pending orders to fulfill...")
+
+events_processed = 0
 
 try:
     while True:
@@ -39,10 +66,11 @@ try:
             else: raise KafkaException(msg.error())
                 
         order_data = json.loads(msg.value().decode('utf-8'))
+        events_processed += 1
         
         # We process instantly, but we calculate a realistic delivery delay
         # to trick the analytics dashboards into seeing real logistics data.
-        speed = order_data["delivery_speed"]
+        speed = order_data.get("delivery_speed", "Standard")
         if speed == "Urgent":
             delay_minutes = random.randint(30, 120)       # 30 mins to 2 hours
         elif speed == "Prime":
@@ -51,7 +79,9 @@ try:
             delay_minutes = random.randint(4320, 10080)   # 3 to 7 days
             
         # Parse the original order time and add the math
-        order_time = datetime.fromisoformat(order_data["order_timestamp"])
+        # Fallback to current time if order_timestamp is missing due to chaos
+        raw_timestamp = order_data.get("order_timestamp", datetime.utcnow().isoformat())
+        order_time = datetime.fromisoformat(raw_timestamp)
         delivery_time = order_time + timedelta(minutes=delay_minutes)
         
         # Copy the order to keep the Chaos Data intact!
@@ -68,7 +98,11 @@ try:
         producer.poll(0)
         
         chaos_flag = delivery_data.get("chaos_type", "CLEAN")
-        print(f"DELIVERED! Order {order_data['order_id'][:12]} arrived in {delay_minutes//60} hours. [Status: {chaos_flag}]")
+        logger.info(f"DELIVERED! Order {order_data.get('order_id', 'UNKNOWN')[:12]} arrived in {delay_minutes//60} hours. [Status: {chaos_flag}]")
+
+        # Terminal update exactly once every 1,000 processed events
+        if events_processed % 1000 == 0:
+            print(f"⚡ Status: Successfully processed {events_processed} deliveries from Kafka...")
 
 except KeyboardInterrupt:
     print("\nStopping Delivery Fulfiller...")

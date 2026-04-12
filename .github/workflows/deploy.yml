@@ -54,11 +54,4 @@ jobs:
       run: |
         kubectl apply -f k8s/apps.yaml
         kubectl apply -f k8s/dashboard.yaml
-        
-        curl -sL https://raw.githubusercontent.com/kubernetes/autoscaler/master/cluster-autoscaler/cloudprovider/aws/examples/cluster-autoscaler-autodiscover.yaml -o autoscaler.yaml
-        
-        sed -i 's/<YOUR CLUSTER NAME>/ecommerce-cluster/g' autoscaler.yaml
-      
-        kubectl apply -f autoscaler.yaml
-
         kubectl rollout restart deployment cart-generator order-generator delivery-generator ecommerce-processor ecommerce-dashboard
