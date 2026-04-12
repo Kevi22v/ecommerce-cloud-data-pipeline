@@ -60,6 +60,14 @@ def initialize_database():
                 order_timestamp TIMESTAMP, delivery_speed TEXT, status TEXT
             );
             
+            -- NEW: Table for raw deliveries
+            CREATE TABLE IF NOT EXISTS raw_deliveries (
+                order_id TEXT PRIMARY KEY,
+                delivery_timestamp TIMESTAMP,
+                delivery_speed TEXT,
+                status TEXT
+            );
+            
             CREATE TABLE IF NOT EXISTS revenue_minute_windows (
                 window_start TIMESTAMP, location TEXT, 
                 total_revenue DOUBLE PRECISION, total_orders BIGINT
@@ -70,11 +78,6 @@ def initialize_database():
                 category_revenue DOUBLE PRECISION, items_sold BIGINT
             );
             
-            CREATE TABLE IF NOT EXISTS delivery_performance_hourly (
-                window_start TIMESTAMP, delivery_speed TEXT, 
-                avg_delivery_minutes DOUBLE PRECISION, completed_deliveries BIGINT
-            );
-            
             CREATE TABLE IF NOT EXISTS abandoned_carts (
                 cart_id TEXT, user_id TEXT, 
                 cart_time TIMESTAMP, cart_items TEXT
@@ -83,6 +86,18 @@ def initialize_database():
             -- Add indexes to make dashboard queries lightning fast
             CREATE INDEX IF NOT EXISTS idx_order_time ON live_orders(order_timestamp);
             CREATE INDEX IF NOT EXISTS idx_rev_time ON revenue_minute_windows(window_start);
+            CREATE INDEX IF NOT EXISTS idx_del_order ON raw_deliveries(order_id);
+
+            -- NEW: The ELT Analytics View (Postgres does the math instantly!)
+            CREATE OR REPLACE VIEW live_delivery_performance AS
+            SELECT 
+                date_trunc('hour', d.delivery_timestamp) AS window_start,
+                o.delivery_speed,
+                AVG(EXTRACT(EPOCH FROM (d.delivery_timestamp - o.order_timestamp)) / 60) AS avg_delivery_minutes,
+                COUNT(o.order_id) AS completed_deliveries
+            FROM live_orders o
+            JOIN raw_deliveries d ON o.order_id = d.order_id
+            GROUP BY date_trunc('hour', d.delivery_timestamp), o.delivery_speed;
         """)
         
         conn.commit()
@@ -147,8 +162,8 @@ def read_and_clean_kafka(topic_name, schema, time_col, unique_id, watermark_dura
 
 # Update the calls to pass the specific durations:
 clean_carts = read_and_clean_kafka("carts", cart_schema, "timestamp", "cart_id", "1 hour")
-clean_orders = read_and_clean_kafka("orders", order_schema, "order_timestamp", "order_id", "7 days")
-clean_deliveries = read_and_clean_kafka("deliveries", delivery_schema, "delivery_timestamp", "order_id", "7 days")
+clean_orders = read_and_clean_kafka("orders", order_schema, "order_timestamp", "order_id", "1 hour")
+clean_deliveries = read_and_clean_kafka("deliveries", delivery_schema, "delivery_timestamp", "order_id", "5 minutes")
 # ==========================================
 # 5. STREAMING AGGREGATIONS (Windowing)
 # ==========================================
@@ -212,47 +227,6 @@ abandoned_carts_stream = carts_aliased.join(
  .select("cart_id", "user_id", "cart_time", "cart_items")
 
 # ==========================================
-# 5C. STREAM-TO-STREAM JOIN (Orders + Deliveries)
-# ==========================================
-# Alias the columns so they don't clash during the join
-orders_aliased = clean_orders.selectExpr(
-    "order_id", "order_timestamp", "delivery_speed", "location as order_location"
-).withWatermark("order_timestamp", "7 days")
-
-deliveries_aliased = clean_deliveries.selectExpr(
-    "order_id as del_order_id", "delivery_timestamp", "status as final_status"
-).withWatermark("delivery_timestamp", "7 days")
-
-# Join them together!
-# We tell Spark: "Match the IDs, and expect the delivery to happen between 0 and 7 days after the order."
-lifecycle_stream = orders_aliased.join(
-    deliveries_aliased,
-    expr("""
-        order_id = del_order_id AND
-        delivery_timestamp >= order_timestamp AND
-        delivery_timestamp <= order_timestamp + interval 7 days
-    """)
-)
-
-# ==========================================
-# 5D. LOGISTICS ANALYTICS (Delivery Performance)
-# ==========================================
-# Calculate the average delivery time per speed tier over a 1-hour tumbling window
-delivery_performance = lifecycle_stream \
-    .groupBy(window(col("delivery_timestamp"), "1 hour"), col("delivery_speed")) \
-    .agg(
-        # Cast timestamps to seconds (double), subtract them, divide by 60 for minutes
-        expr("avg(cast(delivery_timestamp as double) - cast(order_timestamp as double)) / 60").alias("avg_delivery_minutes"),
-        count("order_id").alias("completed_deliveries")
-    ) \
-    .select(
-        col("window.start").alias("window_start"),
-        col("delivery_speed"),
-        col("avg_delivery_minutes"),
-        col("completed_deliveries")
-    )
-
-# ==========================================
 # 6. HOT STORAGE (PostgreSQL)
 # ==========================================
 def write_to_postgres(df, epoch_id, table_name):
@@ -266,6 +240,8 @@ def write_to_postgres(df, epoch_id, table_name):
                        "items", "cart_total", "chaos_type", "discount_code", 
                        "app_version", "order_id", "order_timestamp", 
                        "delivery_speed", "status")
+    elif table_name == "raw_deliveries":
+        df = df.select("order_id", "delivery_timestamp", "delivery_speed", "status")
         
     df.write \
         .format("jdbc") \
@@ -276,7 +252,7 @@ def write_to_postgres(df, epoch_id, table_name):
         .option("driver", "org.postgresql.Driver") \
         .mode("append") \
         .save()
-
+    
 # Start Postgres Streams (Now with 10-second micro-batch triggers!)
 orders_pg_query = clean_orders.writeStream \
     .trigger(processingTime="10 seconds") \
@@ -298,10 +274,10 @@ category_pg_query = revenue_by_category.writeStream \
     .outputMode("update") \
     .start()
 
-delivery_pg_query = delivery_performance.writeStream \
-    .trigger(processingTime="10 seconds") \
-    .foreachBatch(lambda df, epoch_id: write_to_postgres(df, epoch_id, "delivery_performance_hourly")) \
-    .option("checkpointLocation", f"s3a://{S3_BUCKET}/checkpoints/pg_delivery_perf/") \
+delivery_pg_query = clean_deliveries.writeStream \
+    .trigger(processingTime="5 minutes") \
+    .foreachBatch(lambda df, epoch_id: write_to_postgres(df, epoch_id, "raw_deliveries")) \
+    .option("checkpointLocation", f"s3a://{S3_BUCKET}/checkpoints/pg_raw_deliveries/") \
     .outputMode("append") \
     .start()
 
@@ -327,12 +303,12 @@ s3_datalake_query = clean_orders.writeStream \
     .start()
 
 # Save the joined, end-to-end transaction lifecycle to S3 Datalake
-s3_lifecycle_query = lifecycle_stream.writeStream \
+s3_deliveries_query = clean_deliveries.writeStream \
     .format("parquet") \
-    .trigger(processingTime="2 minutes") \
+    .trigger(processingTime="5 minutes") \
+    .option("path", f"s3a://{S3_BUCKET}/datalake/deliveries/") \
+    .option("checkpointLocation", f"s3a://{S3_BUCKET}/checkpoints/s3_deliveries/") \
     .option("mergeSchema", "true") \
-    .option("path", f"s3a://{S3_BUCKET}/datalake/lifecycle/") \
-    .option("checkpointLocation", f"s3a://{S3_BUCKET}/checkpoints/s3_lifecycle/") \
     .outputMode("append") \
     .start()
 
