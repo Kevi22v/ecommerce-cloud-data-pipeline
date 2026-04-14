@@ -1,5 +1,5 @@
 # ==========================================
-# 1. ZOOKEEPER (Required to manage Kafka)
+# 1. ZOOKEEPER (Confluent - Immutable Enterprise Standard)
 # ==========================================
 apiVersion: apps/v1
 kind: Deployment
@@ -17,9 +17,14 @@ spec:
     spec:
       containers:
       - name: zookeeper
-        image: wurstmeister/zookeeper
+        image: confluentinc/cp-zookeeper:7.4.0
         ports:
         - containerPort: 2181
+        env:
+        - name: ZOOKEEPER_CLIENT_PORT
+          value: "2181"
+        - name: ZOOKEEPER_TICK_TIME
+          value: "2000"
 
 ---
 apiVersion: v1
@@ -34,7 +39,7 @@ spec:
       targetPort: 2181
 
 # ==========================================
-# 2. APACHE KAFKA (The Message Broker)
+# 2. APACHE KAFKA (Confluent - Immutable Enterprise Standard)
 # ==========================================
 ---
 apiVersion: apps/v1
@@ -53,20 +58,25 @@ spec:
     spec:
       containers:
       - name: kafka
-        image: wurstmeister/kafka
+        image: confluentinc/cp-kafka:7.4.0
         ports:
         - containerPort: 9092
         env:
-        # 👇 THE FIX: Replace KAFKA_ADVERTISED_HOST_NAME with these two lines
-        - name: KAFKA_LISTENERS
-          value: PLAINTEXT://0.0.0.0:9092
-        - name: KAFKA_ADVERTISED_LISTENERS
-          value: PLAINTEXT://kafka-service:9092
-        # Keep Zookeeper and Create Topics exactly as they are
+        - name: KAFKA_BROKER_ID
+          value: "1"
         - name: KAFKA_ZOOKEEPER_CONNECT
           value: zookeeper-service:2181
-        - name: KAFKA_CREATE_TOPICS
-          value: "carts:20:1,orders:15:1,deliveries:15:1"
+        - name: KAFKA_ADVERTISED_LISTENERS
+          value: PLAINTEXT://kafka-service:9092
+        - name: KAFKA_LISTENERS
+          value: PLAINTEXT://0.0.0.0:9092
+        - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
+          value: "1"
+        # --- THE SPIKE OPTIMIZATION ---
+        - name: KAFKA_AUTO_CREATE_TOPICS_ENABLE
+          value: "true"
+        - name: KAFKA_NUM_PARTITIONS
+          value: "30"
 
 ---
 apiVersion: v1
@@ -79,32 +89,3 @@ spec:
   ports:
     - port: 9092
       targetPort: 9092
-
-# ==========================================
-# 3. KAFKA EXPORTER (For Prometheus Monitoring)
-# ==========================================
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: kafka-exporter
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: kafka-exporter
-  template:
-    metadata:
-      labels:
-        app: kafka-exporter
-      annotations:
-        prometheus.io/scrape: "true"
-        prometheus.io/port: "9308"
-    spec:
-      containers:
-      - name: kafka-exporter
-        image: danielqsj/kafka-exporter
-        args:
-          - "--kafka.server=kafka-service:9092"
-        ports:
-        - containerPort: 9308

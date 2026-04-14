@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka-exporter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kafka-exporter
+  template:
+    metadata:
+      labels:
+        app: kafka-exporter
+      # 👇 THIS IS THE MAGIC. This tells Prometheus to knock on this door.
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9308"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: kafka-exporter
+        image: danielqsj/kafka-exporter:latest
+        imagePullPolicy: IfNotPresent
+        # 👇 This tells the exporter exactly where your Kafka broker is living
+        args: 
+          - "--kafka.server=kafka-service:9092"
+        ports:
+        - containerPort: 9308
+          name: metrics
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi
+
+---
+# (Optional but highly recommended) A Service to expose it cleanly inside the cluster
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-exporter-service
+  labels:
+    app: kafka-exporter
+spec:
+  ports:
+  - name: metrics
+    port: 9308
+    targetPort: 9308
+  selector:
+    app: kafka-exporter

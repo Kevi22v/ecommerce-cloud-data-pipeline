@@ -164,7 +164,7 @@ def read_and_clean_kafka(topic_name, schema, time_col, unique_id, watermark_dura
         .option("kafka.bootstrap.servers", KAFKA_BROKER) \
         .option("subscribe", topic_name) \
         .option("startingOffsets", "latest") \
-        .option("maxOffsetsPerTrigger", 1000) \
+        .option("maxOffsetsPerTrigger", 10000) \
         .load()
     
     parsed_df = raw_df.select(from_json(col("value").cast("string"), schema).alias("data")).select("data.*")
@@ -243,36 +243,36 @@ def write_to_postgres(df, epoch_id, table_name):
         .mode("append") \
         .save()
     
-# Start Postgres Streams (Now with 10-second micro-batch triggers!)
+# Start Postgres Streams (Now with 2-second micro-batch triggers!)
 orders_pg_query = clean_orders.writeStream \
-    .trigger(processingTime="10 seconds") \
+    .trigger(processingTime="2 seconds") \
     .foreachBatch(lambda df, epoch_id: write_to_postgres(df, epoch_id, "live_orders")) \
     .option("checkpointLocation", f"s3a://{S3_BUCKET}/checkpoints/pg_orders/") \
     .start()
 
 revenue_pg_query = revenue_by_location.writeStream \
-    .trigger(processingTime="10 seconds") \
+    .trigger(processingTime="2 seconds") \
     .foreachBatch(lambda df, epoch_id: write_to_postgres(df, epoch_id, "revenue_minute_windows")) \
     .option("checkpointLocation", f"s3a://{S3_BUCKET}/checkpoints/pg_revenue/") \
     .outputMode("update") \
     .start()
 
 category_pg_query = revenue_by_category.writeStream \
-    .trigger(processingTime="10 seconds") \
+    .trigger(processingTime="2 seconds") \
     .foreachBatch(lambda df, epoch_id: write_to_postgres(df, epoch_id, "revenue_category_windows")) \
     .option("checkpointLocation", f"s3a://{S3_BUCKET}/checkpoints/pg_category/") \
     .outputMode("update") \
     .start()
 
 delivery_pg_query = clean_deliveries.writeStream \
-    .trigger(processingTime="5 minutes") \
+    .trigger(processingTime="2 minutes") \
     .foreachBatch(lambda df, epoch_id: write_to_postgres(df, epoch_id, "raw_deliveries")) \
     .option("checkpointLocation", f"s3a://{S3_BUCKET}/checkpoints/pg_raw_deliveries/") \
     .outputMode("append") \
     .start()
 
 cart_pg_query = clean_carts.writeStream \
-    .trigger(processingTime="2 minutes") \
+    .trigger(processingTime="5 minutes") \
     .foreachBatch(lambda df, epoch_id: write_to_postgres(df, epoch_id, "raw_carts")) \
     .option("checkpointLocation", f"s3a://{S3_BUCKET}/checkpoints/pg_raw_carts/") \
     .outputMode("append") \
@@ -285,7 +285,7 @@ cart_pg_query = clean_carts.writeStream \
 # mergeSchema=true ensures new columns (like discount_code) are added automatically!
 s3_datalake_query = clean_orders.writeStream \
     .format("parquet") \
-    .trigger(processingTime="2 minutes") \
+    .trigger(processingTime="5 minutes") \
     .option("path", f"s3a://{S3_BUCKET}/datalake/orders/") \
     .option("checkpointLocation", f"s3a://{S3_BUCKET}/checkpoints/s3_orders/") \
     .option("mergeSchema", "true") \

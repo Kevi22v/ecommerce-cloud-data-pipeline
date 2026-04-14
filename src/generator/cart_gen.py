@@ -114,7 +114,7 @@ if __name__ == "__main__":
     print("--> Target: 1000 events/sec\n")
     
     # --- 2. BATCH RATE LIMITING CONFIG ---
-    TARGET_RATE = 1000
+    TARGET_RATE = 2000
     BATCH_SIZE = 100
     IDEAL_BATCH_TIME = BATCH_SIZE / TARGET_RATE  # 0.1 seconds per 100 items
     
