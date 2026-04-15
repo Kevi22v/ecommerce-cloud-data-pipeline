@@ -164,7 +164,7 @@ def read_and_clean_kafka(topic_name, schema, time_col, unique_id, watermark_dura
         .option("kafka.bootstrap.servers", KAFKA_BROKER) \
         .option("subscribe", topic_name) \
         .option("startingOffsets", "latest") \
-        .option("maxOffsetsPerTrigger", 10000) \
+        .option("maxOffsetsPerTrigger", 6000) \
         .load()
     
     parsed_df = raw_df.select(from_json(col("value").cast("string"), schema).alias("data")).select("data.*")
