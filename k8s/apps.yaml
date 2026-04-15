@@ -31,11 +31,11 @@ spec:
             name: ecommerce-config
         resources:
           requests:
-            cpu: "250m"
+            cpu: "200m"
             memory: "128Mi"
           limits:            
-            cpu: "400m"      
-            memory: "250Mi"  
+            cpu: "300m"      
+            memory: "128Mi"  
 
 ---
 # ==========================================
@@ -166,7 +166,7 @@ spec:
                 key: AWS_SECRET_KEY
         resources:
           requests:
-            cpu: "1.5"
+            cpu: "1"
             memory: "3Gi"
           limits:
             cpu: "1.75"      
