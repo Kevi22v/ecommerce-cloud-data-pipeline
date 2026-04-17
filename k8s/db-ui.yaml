@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: db-ui
+  labels:
+    app: db-ui
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: db-ui
+  template:
+    metadata:
+      labels:
+        app: db-ui
+    spec:
+      containers:
+        - name: adminer
+          image: adminer:latest
+          ports:
+            - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: db-ui-service
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8080
+      targetPort: 8080
+  selector:
+    app: db-ui

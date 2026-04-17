@@ -1,0 +1,40 @@
+# ==========================================
+# 1. THE CART GENERATOR (The Spammer)
+# ==========================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cart-generator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cart-generator
+  template:
+    metadata:
+      labels:
+        app: cart-generator
+      annotations:                     
+        prometheus.io/scrape: "true"   
+        prometheus.io/port: "5000"   
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: generator
+        image: vivek22v/ecommerce-generator:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 5000
+        command: ["python", "cart_gen.py"]
+        envFrom:
+        - configMapRef:
+            name: ecommerce-config
+        resources:
+          requests:
+            cpu: "200m"
+            memory: "128Mi"
+          limits:            
+            cpu: "300m"      
+            memory: "128Mi"  
+
+---

@@ -1,0 +1,53 @@
+# ==========================================
+# 4. THE DATA PROCESSOR (PySpark)
+# ==========================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ecommerce-processor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: processor
+  template:
+    metadata:
+      labels:
+        app: processor
+      annotations:                     
+        prometheus.io/scrape: "true"   
+        prometheus.io/port: "4040"     
+        prometheus.io/path: "/metrics/prometheus"
+    spec:
+      containers:
+      - name: processor
+        image: vivek22v/ecommerce-processor:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 4040 
+        envFrom:
+        - configMapRef:
+            name: ecommerce-config
+        env:
+          - name: DB_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: ecommerce-secrets
+                key: DB_PASSWORD
+          - name: AWS_ACCESS_KEY_ID
+            valueFrom:
+              secretKeyRef:
+                name: ecommerce-secrets
+                key: AWS_ACCESS_KEY
+          - name: AWS_SECRET_ACCESS_KEY
+            valueFrom:
+              secretKeyRef:
+                name: ecommerce-secrets
+                key: AWS_SECRET_KEY
+        resources:
+          requests:
+            cpu: "1"
+            memory: "3Gi"
+          limits:
+            cpu: "1.75"      
+            memory: "6Gi" 

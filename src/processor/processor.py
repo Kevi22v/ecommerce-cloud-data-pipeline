@@ -18,7 +18,7 @@ spark = SparkSession.builder \
     .config("spark.hadoop.fs.s3a.endpoint", "s3.amazonaws.com") \
     .config("spark.ui.prometheus.enabled", "true") \
     .config("spark.metrics.conf.*.sink.prometheusServlet.class", "org.apache.spark.metrics.sink.PrometheusServlet") \
-    .config("spark.sql.shuffle.partitions", "4") \
+    .config("spark.sql.shuffle.partitions", "20") \
     .config("spark.sql.streaming.statefulOperator.checkCorrectness.enabled", "false") \
     .getOrCreate()
 
