@@ -19,6 +19,13 @@ spec:
         prometheus.io/port: "4040"     
         prometheus.io/path: "/metrics/prometheus"
     spec:
+      nodeSelector:
+        workload: spot
+      tolerations:
+      - key: workload
+        operator: Equal
+        value: spot
+        effect: NoSchedule
       containers:
       - name: processor
         image: vivek22v/ecommerce-processor:latest
@@ -44,10 +51,24 @@ spec:
               secretKeyRef:
                 name: ecommerce-secrets
                 key: AWS_SECRET_KEY
+        readinessProbe:
+          exec:
+            command: ["sh", "-c", "kill -0 1"]
+          initialDelaySeconds: 20
+          periodSeconds: 10
+          timeoutSeconds: 2
+          failureThreshold: 3
+        livenessProbe:
+          exec:
+            command: ["sh", "-c", "kill -0 1"]
+          initialDelaySeconds: 60
+          periodSeconds: 15
+          timeoutSeconds: 2
+          failureThreshold: 3
         resources:
           requests:
-            cpu: "1"
-            memory: "3Gi"
+            cpu: "500m"
+            memory: "2Gi"
           limits:
-            cpu: "1.75"      
+            cpu: "1500m"
             memory: "6Gi" 

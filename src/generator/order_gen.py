@@ -88,10 +88,13 @@ try:
             order_data["order_timestamp"] = datetime.utcnow().isoformat()
             order_data["delivery_speed"] = delivery_speed
             order_data["status"] = "Pending"
+
+            order_key = str(order_data.get("order_id", order_data.get("cart_id", "unknown"))).encode('utf-8')
             
             # Send to Kafka
             producer.produce(
                 topic=TOPIC_ORDERS,
+                key=order_key,
                 value=json.dumps(order_data).encode('utf-8'),
                 callback=delivery_report
             )

@@ -126,9 +126,10 @@ if __name__ == "__main__":
         while True:
             cart_data = generate_cart()
             payload = json.dumps(cart_data).encode('utf-8')
+            partition_key = str(cart_data.get('user_id', cart_data.get('cart_id', 'unknown'))).encode('utf-8')
             
             # Send primary cart
-            producer.produce(topic=TOPIC_CARTS, value=payload, callback=delivery_report)
+            producer.produce(topic=TOPIC_CARTS, key=partition_key, value=payload, callback=delivery_report)
             events_sent_this_batch += 1
             
             # Log primary cart to background file
@@ -137,7 +138,7 @@ if __name__ == "__main__":
         
             # Send and log chaos duplicate
             if CHAOS_MODE and random.random() < 0.05:
-                producer.produce(topic=TOPIC_CARTS, value=payload, callback=delivery_report)
+                producer.produce(topic=TOPIC_CARTS, key=partition_key, value=payload, callback=delivery_report)
                 events_sent_this_batch += 1
                 logger.info(f"🛒 Sent Cart {cart_data['cart_id'][:8]}. [Status: DUPLICATE_SENT]")
             

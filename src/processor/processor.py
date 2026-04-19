@@ -18,7 +18,7 @@ spark = SparkSession.builder \
     .config("spark.hadoop.fs.s3a.endpoint", "s3.amazonaws.com") \
     .config("spark.ui.prometheus.enabled", "true") \
     .config("spark.metrics.conf.*.sink.prometheusServlet.class", "org.apache.spark.metrics.sink.PrometheusServlet") \
-    .config("spark.sql.shuffle.partitions", "20") \
+    .config("spark.sql.shuffle.partitions", "30") \
     .config("spark.sql.streaming.statefulOperator.checkCorrectness.enabled", "false") \
     .getOrCreate()
 
@@ -158,17 +158,18 @@ delivery_schema = order_schema.add("delivery_timestamp", TimestampType(), True)
 # ==========================================
 # 4. INGESTION & DATA QUALITY (The Cleanup)
 # ==========================================
-def read_and_clean_kafka(topic_name, schema, time_col, unique_id, watermark_duration): 
+def read_and_clean_kafka(topic_name, schema, time_col, unique_id, watermark_duration, filter_cart=True): 
     raw_df = spark.readStream \
         .format("kafka") \
         .option("kafka.bootstrap.servers", KAFKA_BROKER) \
         .option("subscribe", topic_name) \
-        .option("startingOffsets", "latest") \
-        .option("maxOffsetsPerTrigger", 6000) \
+        .option("startingOffsets", "earliest") \
+        .option("failOnDataLoss", "false") \
+        .option("maxOffsetsPerTrigger", 15000) \
         .load()
     
     parsed_df = raw_df.select(from_json(col("value").cast("string"), schema).alias("data")).select("data.*")
-    validated_df = parsed_df.filter(col("cart_total") >= 0)
+    validated_df = parsed_df.filter(col("cart_total") >= 0) if filter_cart else parsed_df
     
     watermarked_df = validated_df.withWatermark(time_col, watermark_duration)
     deduplicated_df = watermarked_df.dropDuplicates([unique_id, time_col])
@@ -178,7 +179,7 @@ def read_and_clean_kafka(topic_name, schema, time_col, unique_id, watermark_dura
 # Update the calls to pass the specific durations:
 clean_carts = read_and_clean_kafka("carts", cart_schema, "timestamp", "cart_id", "5 minutes")
 clean_orders = read_and_clean_kafka("orders", order_schema, "order_timestamp", "order_id", "5 minutes")
-clean_deliveries = read_and_clean_kafka("deliveries", delivery_schema, "delivery_timestamp", "order_id", "5 minutes")
+clean_deliveries = read_and_clean_kafka("deliveries", delivery_schema, "delivery_timestamp", "order_id", "5 minutes", filter_cart=False)
 # ==========================================
 # 5. STREAMING AGGREGATIONS (Windowing)
 # ==========================================
@@ -240,25 +241,27 @@ def write_to_postgres(df, epoch_id, table_name):
         .option("user", DB_USER) \
         .option("password", DB_PASS) \
         .option("driver", "org.postgresql.Driver") \
+        .option("batchsize", "1000") \
+        .option("numPartitions", "4") \
         .mode("append") \
         .save()
     
-# Start Postgres Streams (Now with 2-second micro-batch triggers!)
+# Start Postgres streams with staggered trigger intervals to reduce contention.
 orders_pg_query = clean_orders.writeStream \
-    .trigger(processingTime="2 seconds") \
+    .trigger(processingTime="5 seconds") \
     .foreachBatch(lambda df, epoch_id: write_to_postgres(df, epoch_id, "live_orders")) \
     .option("checkpointLocation", f"s3a://{S3_BUCKET}/checkpoints/pg_orders/") \
     .start()
 
 revenue_pg_query = revenue_by_location.writeStream \
-    .trigger(processingTime="2 seconds") \
+    .trigger(processingTime="30 seconds") \
     .foreachBatch(lambda df, epoch_id: write_to_postgres(df, epoch_id, "revenue_minute_windows")) \
     .option("checkpointLocation", f"s3a://{S3_BUCKET}/checkpoints/pg_revenue/") \
     .outputMode("update") \
     .start()
 
 category_pg_query = revenue_by_category.writeStream \
-    .trigger(processingTime="2 seconds") \
+    .trigger(processingTime="30 seconds") \
     .foreachBatch(lambda df, epoch_id: write_to_postgres(df, epoch_id, "revenue_category_windows")) \
     .option("checkpointLocation", f"s3a://{S3_BUCKET}/checkpoints/pg_category/") \
     .outputMode("update") \

@@ -1,0 +1,23 @@
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: processor-vpa
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: ecommerce-processor
+  updatePolicy:
+    updateMode: "Initial"
+  resourcePolicy:
+    containerPolicies:
+    - containerName: processor
+      minAllowed:
+        cpu: "500m"
+        memory: "2Gi"
+      maxAllowed:
+        cpu: "7000m"
+        memory: "24Gi"
+      controlledResources:
+      - cpu
+      - memory

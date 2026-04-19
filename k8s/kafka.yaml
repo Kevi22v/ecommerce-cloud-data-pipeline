@@ -77,6 +77,8 @@ spec:
           value: "true"
         - name: KAFKA_NUM_PARTITIONS
           value: "30"
+        - name: KAFKA_MESSAGE_MAX_BYTES
+          value: "1000000"
 
 ---
 apiVersion: v1

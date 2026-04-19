@@ -16,6 +16,10 @@ terraform {
       source  = "hashicorp/local"
       version = "~> 2.4"
     }
+    tls = {
+      source  = "hashicorp/tls"
+      version = "~> 4.0"
+    }
   }
 }
 provider "aws" {
@@ -38,7 +42,7 @@ resource "aws_vpc" "main" {
   cidr_block           = "10.0.0.0/16"
   enable_dns_support   = true
   enable_dns_hostnames = true
-  tags = { Name = "ecommerce-secure-vpc" }
+  tags                 = { Name = "ecommerce-secure-vpc" }
 }
 
 resource "aws_subnet" "public_1" {
@@ -46,7 +50,7 @@ resource "aws_subnet" "public_1" {
   cidr_block              = "10.0.1.0/24"
   availability_zone       = "us-east-1a"
   map_public_ip_on_launch = true
-  tags = { Name = "ecommerce-public-subnet-1" }
+  tags                    = { Name = "ecommerce-public-subnet-1" }
 }
 
 resource "aws_subnet" "public_2" {
@@ -54,7 +58,7 @@ resource "aws_subnet" "public_2" {
   cidr_block              = "10.0.2.0/24"
   availability_zone       = "us-east-1b"
   map_public_ip_on_launch = true
-  tags = { Name = "ecommerce-public-subnet-2" }
+  tags                    = { Name = "ecommerce-public-subnet-2" }
 }
 
 resource "aws_internet_gateway" "igw" {
@@ -82,9 +86,9 @@ resource "aws_route_table_association" "a2" {
 # 3. DATABASE (RDS PostgreSQL - LOCKED DOWN)
 # ==========================================
 resource "aws_security_group" "db_sg" {
-  name        = "ecommerce-secure-db-sg"
-  vpc_id      = aws_vpc.main.id
-  
+  name   = "ecommerce-secure-db-sg"
+  vpc_id = aws_vpc.main.id
+
   ingress {
     description = "Allow Postgres traffic ONLY from inside the VPC"
     from_port   = 5432
@@ -92,7 +96,7 @@ resource "aws_security_group" "db_sg" {
     protocol    = "tcp"
     cidr_blocks = [aws_vpc.main.cidr_block] # Security Upgrade: Replaced 0.0.0.0/0
   }
-  
+
   egress {
     from_port   = 0
     to_port     = 0
@@ -127,7 +131,7 @@ resource "aws_db_instance" "postgres" {
 resource "aws_iam_role" "eks_cluster" {
   name = "ecommerce-eks-cluster-role"
   assume_role_policy = jsonencode({
-    Version = "2012-10-17"
+    Version   = "2012-10-17"
     Statement = [{ Action = "sts:AssumeRole", Effect = "Allow", Principal = { Service = "eks.amazonaws.com" } }]
   })
 }
@@ -146,13 +150,23 @@ resource "aws_eks_cluster" "eks" {
   depends_on = [aws_iam_role_policy_attachment.eks_cluster_policy]
 }
 
+data "tls_certificate" "eks" {
+  url = aws_eks_cluster.eks.identity[0].oidc[0].issuer
+}
+
+resource "aws_iam_openid_connect_provider" "eks" {
+  client_id_list  = ["sts.amazonaws.com"]
+  thumbprint_list = [data.tls_certificate.eks.certificates[0].sha1_fingerprint]
+  url             = aws_eks_cluster.eks.identity[0].oidc[0].issuer
+}
+
 # ==========================================
 # 5. EKS WORKER NODES (Auto-Scaling Enabled)
 # ==========================================
 resource "aws_iam_role" "eks_nodes" {
   name = "ecommerce-eks-node-role"
   assume_role_policy = jsonencode({
-    Version = "2012-10-17"
+    Version   = "2012-10-17"
     Statement = [{ Action = "sts:AssumeRole", Effect = "Allow", Principal = { Service = "ec2.amazonaws.com" } }]
   })
 }
@@ -169,14 +183,33 @@ resource "aws_iam_role_policy_attachment" "nodes_ecr" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
   role       = aws_iam_role.eks_nodes.name
 }
-resource "aws_iam_role_policy_attachment" "nodes_s3_access" {
-  policy_arn = "arn:aws:iam::aws:policy/AmazonS3FullAccess"
-  role       = aws_iam_role.eks_nodes.name
+
+resource "aws_iam_role" "cluster_autoscaler" {
+  name = "ecommerce-cluster-autoscaler-irsa"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Federated = aws_iam_openid_connect_provider.eks.arn
+        }
+        Action = "sts:AssumeRoleWithWebIdentity"
+        Condition = {
+          StringEquals = {
+            "${replace(aws_iam_openid_connect_provider.eks.url, "https://", "")}:sub" = "system:serviceaccount:kube-system:cluster-autoscaler"
+            "${replace(aws_iam_openid_connect_provider.eks.url, "https://", "")}:aud" = "sts.amazonaws.com"
+          }
+        }
+      }
+    ]
+  })
 }
 
-resource "aws_iam_role_policy" "cluster_autoscaler_policy" {
+resource "aws_iam_role_policy" "cluster_autoscaler" {
   name = "ecommerce-cluster-autoscaler-policy"
-  role = aws_iam_role.eks_nodes.id
+  role = aws_iam_role.cluster_autoscaler.id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -186,10 +219,16 @@ resource "aws_iam_role_policy" "cluster_autoscaler_policy" {
           "autoscaling:DescribeAutoScalingGroups",
           "autoscaling:DescribeAutoScalingInstances",
           "autoscaling:DescribeLaunchConfigurations",
+          "autoscaling:DescribeScalingActivities",
           "autoscaling:DescribeTags",
           "autoscaling:SetDesiredCapacity",
           "autoscaling:TerminateInstanceInAutoScalingGroup",
-          "ec2:DescribeLaunchTemplateVersions"
+          "ec2:DescribeAvailabilityZones",
+          "ec2:DescribeImages",
+          "ec2:DescribeInstanceTypes",
+          "ec2:DescribeLaunchTemplateVersions",
+          "ec2:GetInstanceTypesFromInstanceRequirements",
+          "eks:DescribeNodegroup"
         ]
         Effect   = "Allow"
         Resource = "*"
@@ -203,16 +242,64 @@ resource "aws_eks_node_group" "node_group" {
   node_group_name = "ecommerce-node-group"
   node_role_arn   = aws_iam_role.eks_nodes.arn
   subnet_ids      = [aws_subnet.public_1.id, aws_subnet.public_2.id]
-  instance_types  = ["t3.large"] 
+  instance_types  = ["m5.large"]
 
   scaling_config {
     desired_size = 2
     min_size     = 2
-    max_size     = 4
+    max_size     = 6
   }
   tags = {
+    "kubernetes.io/cluster/ecommerce-cluster"     = "owned"
     "k8s.io/cluster-autoscaler/ecommerce-cluster" = "owned"
     "k8s.io/cluster-autoscaler/enabled"           = "true"
+  }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.nodes_policy,
+    aws_iam_role_policy_attachment.nodes_cni,
+    aws_iam_role_policy_attachment.nodes_ecr
+  ]
+}
+
+resource "aws_eks_node_group" "spot_node_group" {
+  cluster_name    = aws_eks_cluster.eks.name
+  node_group_name = "ecommerce-spot-node-group"
+  node_role_arn   = aws_iam_role.eks_nodes.arn
+  subnet_ids      = [aws_subnet.public_1.id, aws_subnet.public_2.id]
+
+  capacity_type  = "SPOT"
+  instance_types = [
+    "m5.large",
+    "m5a.large",
+    "m5.xlarge",
+    "m5a.xlarge",
+    "m5.2xlarge",
+    "m5a.2xlarge"
+  ]
+
+  scaling_config {
+    desired_size = 0
+    min_size     = 0
+    max_size     = 10
+  }
+
+  labels = {
+    workload = "spot"
+  }
+
+  taint {
+    key    = "workload"
+    value  = "spot"
+    effect = "NO_SCHEDULE"
+  }
+
+  tags = {
+    "kubernetes.io/cluster/ecommerce-cluster"                = "owned"
+    "k8s.io/cluster-autoscaler/ecommerce-cluster"            = "owned"
+    "k8s.io/cluster-autoscaler/enabled"                      = "true"
+    "k8s.io/cluster-autoscaler/node-template/label/workload" = "spot"
+    "k8s.io/cluster-autoscaler/node-template/taint/workload" = "spot:NoSchedule"
   }
 
   depends_on = [
@@ -234,6 +321,10 @@ output "eks_cluster_name" {
   value = aws_eks_cluster.eks.name
 }
 
+output "cluster_autoscaler_role_arn" {
+  value = aws_iam_role.cluster_autoscaler.arn
+}
+
 # We output the password so YOU can see it, but mark it sensitive so it doesn't print on the screen normally
 output "db_password" {
   value       = random_password.db_password.result
@@ -248,9 +339,9 @@ resource "random_id" "bucket_suffix" {
 
 # The Core S3 Data Lake Bucket
 resource "aws_s3_bucket" "data_lake" {
-  bucket        = "ecommerce-datalake-${random_id.bucket_suffix.hex}"
-  
-  force_destroy = true 
+  bucket = "ecommerce-datalake-${random_id.bucket_suffix.hex}"
+
+  force_destroy = true
 
   tags = {
     Name        = "Ecommerce Data Lake"
@@ -315,7 +406,7 @@ provider "kubernetes" {
 # Auto-Inject Secret into Kubernetes
 resource "kubernetes_secret" "ecommerce_secrets" {
   metadata { name = "ecommerce-secrets" }
-  data = { 
+  data = {
     DB_PASSWORD    = random_password.db_password.result
     AWS_ACCESS_KEY = aws_iam_access_key.processor_key.id
     AWS_SECRET_KEY = aws_iam_access_key.processor_key.secret
@@ -326,7 +417,7 @@ resource "kubernetes_secret" "ecommerce_secrets" {
 resource "kubernetes_config_map" "ecommerce_config" {
   metadata { name = "ecommerce-config" }
   data = {
-    DB_HOST      = split(":", aws_db_instance.postgres.endpoint)[0] 
+    DB_HOST      = split(":", aws_db_instance.postgres.endpoint)[0]
     DB_NAME      = "ecommerce_db"
     DB_USER      = "dbadmin"
     S3_BUCKET    = aws_s3_bucket.data_lake.bucket
